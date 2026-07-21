@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import SurfMap from "./SurfMap";
 
 type Zone = "North County" | "Central" | "South Bay";
@@ -18,20 +18,22 @@ type Spot = {
   water: string;
   crowd: string;
   best: string;
+  score: number;
+  swellDegrees: number;
   lat: number;
   lon: number;
 };
 
-const spots: Spot[] = [
-  { name: "Trestles", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", period: "14s", wind: "2 kt E", tide: "2.4 ft rising", water: "70°", crowd: "Busy", best: "6:10–8:45 AM", lat: 33.3833, lon: -117.5937 },
-  { name: "Oceanside", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "SSW", period: "13s", wind: "3 kt ESE", tide: "2.5 ft rising", water: "70°", crowd: "Moderate", best: "6:20–9:10 AM", lat: 33.1937, lon: -117.3831 },
-  { name: "Swami’s", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6:15–9:00 AM", lat: 33.0344, lon: -117.2926 },
-  { name: "Blacks", zone: "Central", height: "4–6 ft", rating: "Excellent", swell: "WNW", period: "15s", wind: "3 kt E", tide: "2.8 ft rising", water: "69°", crowd: "Moderate", best: "6:30–9:00 AM", lat: 32.8875, lon: -117.2533 },
-  { name: "Windansea", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "W", period: "13s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Light", best: "6:45–9:20 AM", lat: 32.8313, lon: -117.2818 },
-  { name: "Tourmaline", zone: "Central", height: "2–3 ft", rating: "Good", swell: "W", period: "12s", wind: "2 kt ENE", tide: "3.0 ft rising", water: "70°", crowd: "Moderate", best: "6:25–9:15 AM", lat: 32.8057, lon: -117.2610 },
-  { name: "Ocean Beach", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "WSW", period: "13s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Light", best: "6:30–9:10 AM", lat: 32.7495, lon: -117.2526 },
-  { name: "Coronado", zone: "South Bay", height: "1–3 ft", rating: "Fair", swell: "SW", period: "12s", wind: "4 kt E", tide: "3.2 ft rising", water: "71°", crowd: "Light", best: "6:40–9:30 AM", lat: 32.6800, lon: -117.1835 },
-  { name: "Imperial Beach", zone: "South Bay", height: "2–3 ft", rating: "Poor", swell: "SW", period: "11s", wind: "4 kt ESE", tide: "3.3 ft rising", water: "71°", crowd: "Light", best: "6:30–8:40 AM", lat: 32.5791, lon: -117.1324 },
+const initialSpots: Spot[] = [
+  { name: "Trestles", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", swellDegrees: 195, period: "14s", wind: "2 kt E", tide: "2.4 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 82, lat: 33.3833, lon: -117.5937 },
+  { name: "Oceanside", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "SSW", swellDegrees: 195, period: "13s", wind: "3 kt ESE", tide: "2.5 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 66, lat: 33.1937, lon: -117.3831 },
+  { name: "Swami’s", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", swellDegrees: 195, period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 81, lat: 33.0344, lon: -117.2926 },
+  { name: "Blacks", zone: "Central", height: "4–6 ft", rating: "Excellent", swell: "WNW", swellDegrees: 285, period: "15s", wind: "3 kt E", tide: "2.8 ft rising", water: "69°", crowd: "Moderate", best: "6 AM–9 AM", score: 94, lat: 32.8875, lon: -117.2533 },
+  { name: "Windansea", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "13s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Light", best: "6 AM–9 AM", score: 64, lat: 32.8313, lon: -117.2818 },
+  { name: "Tourmaline", zone: "Central", height: "2–3 ft", rating: "Good", swell: "W", swellDegrees: 270, period: "12s", wind: "2 kt ENE", tide: "3.0 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 72, lat: 32.8057, lon: -117.2610 },
+  { name: "Ocean Beach", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 248, period: "13s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Light", best: "6 AM–9 AM", score: 63, lat: 32.7495, lon: -117.2526 },
+  { name: "Coronado", zone: "South Bay", height: "1–3 ft", rating: "Fair", swell: "SW", swellDegrees: 225, period: "12s", wind: "4 kt E", tide: "3.2 ft rising", water: "71°", crowd: "Light", best: "6 AM–9 AM", score: 59, lat: 32.6800, lon: -117.1835 },
+  { name: "Imperial Beach", zone: "South Bay", height: "2–3 ft", rating: "Poor", swell: "SW", swellDegrees: 225, period: "11s", wind: "4 kt ESE", tide: "3.3 ft rising", water: "71°", crowd: "Light", best: "6 AM–9 AM", score: 43, lat: 32.5791, lon: -117.1324 },
 ];
 
 const zoneDefaults: Record<Zone, string> = {
@@ -40,7 +42,7 @@ const zoneDefaults: Record<Zone, string> = {
   "South Bay": "Coronado",
 };
 
-const hourly = [
+const initialHourly = [
   { time: "6 AM", height: 3.8, wind: 2, score: 88 },
   { time: "7 AM", height: 4.4, wind: 3, score: 96 },
   { time: "8 AM", height: 4.7, wind: 3, score: 92 },
@@ -50,13 +52,26 @@ const hourly = [
   { time: "12 PM", height: 3.2, wind: 10, score: 44 },
 ];
 
-const days = [
+const initialDays = [
   { day: "Today", date: "Jul 21", height: "4–6 ft", rating: "Good", period: "15s" },
   { day: "Wed", date: "Jul 22", height: "3–5 ft", rating: "Good", period: "14s" },
   { day: "Thu", date: "Jul 23", height: "2–4 ft", rating: "Fair", period: "12s" },
   { day: "Fri", date: "Jul 24", height: "3–4 ft", rating: "Fair", period: "13s" },
   { day: "Sat", date: "Jul 25", height: "4–6 ft", rating: "Good", period: "16s" },
 ];
+
+type ZoneSeries = Record<string, {
+  hourly?: Array<{ time: string; height: number; wind: number; score: number }>;
+  days?: Array<{ day: string; date: string; height: string; rating: Rating; period: string }>;
+}>;
+
+type ConditionsPayload = {
+  mode: "live" | "partial" | "unavailable";
+  generatedAt: string;
+  conditions?: Array<Partial<Spot> & { name: string }>;
+  zones?: ZoneSeries;
+  buoy?: { observedAt?: string | null } | null;
+};
 
 function Icon({ name }: { name: "wave" | "wind" | "tide" | "temp" | "clock" | "arrow" | "spark" }) {
   const paths = {
@@ -85,9 +100,46 @@ export default function Home() {
   const [zone, setZone] = useState<Zone>("Central");
   const [selectedName, setSelectedName] = useState("Blacks");
   const [units, setUnits] = useState<"FT" | "M">("FT");
+  const [spots, setSpots] = useState(initialSpots);
+  const [series, setSeries] = useState<ZoneSeries>({});
+  const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "sample">("loading");
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
-  const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [zone]);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/conditions", { signal: controller.signal })
+      .then((response) => response.json() as Promise<ConditionsPayload>)
+      .then((payload) => {
+        if ((payload.mode === "live" || payload.mode === "partial") && payload.conditions?.length) {
+          setSpots(initialSpots.map((spot) => ({
+            ...spot,
+            ...(payload.conditions?.find((condition) => condition.name === spot.name) ?? {}),
+          })));
+          setSeries(payload.zones ?? {});
+          setDataMode(payload.mode);
+        } else {
+          setDataMode("sample");
+        }
+        setUpdatedAt(new Date(payload.generatedAt));
+      })
+      .catch((error: unknown) => {
+        if ((error as { name?: string })?.name !== "AbortError") setDataMode("sample");
+      });
+    return () => controller.abort();
+  }, []);
+
+  const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [spots, zone]);
   const selected = spots.find((spot) => spot.name === selectedName) ?? spots[3];
+  const hourly = series[zone]?.hourly?.length ? series[zone].hourly : initialHourly;
+  const days = series[zone]?.days?.length ? series[zone].days : initialDays;
+  const strongestDay = days.reduce((best, day) => {
+    const bestHigh = Number(best.height.match(/\d+/g)?.at(-1) ?? 0);
+    const dayHigh = Number(day.height.match(/\d+/g)?.at(-1) ?? 0);
+    return dayHigh > bestHigh ? day : best;
+  }, days[0]);
+  const updatedLabel = updatedAt
+    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).format(updatedAt)
+    : "Connecting…";
 
   function selectZone(next: Zone) {
     setZone(next);
@@ -116,7 +168,9 @@ export default function Home() {
         </nav>
 
         <div className="header-tools">
-          <span className="updated"><i /> Updated 5:42 AM</span>
+          <span className={`updated ${dataMode}`} title={dataMode === "sample" ? "Live providers are temporarily unavailable; showing sample fallback values." : "Forecast data refreshes every 15 minutes."}>
+            <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "sample" ? `Sample fallback · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
+          </span>
           <button className="unit-toggle" onClick={() => setUnits(units === "FT" ? "M" : "FT")} aria-label="Toggle wave height units">
             <b>{units}</b><span>{units === "FT" ? "M" : "FT"}</span>
           </button>
@@ -130,6 +184,7 @@ export default function Home() {
             zone={zone}
             selectedName={selected.name}
             units={units}
+            swellLabel={`${selected.swell} ${selected.swellDegrees}°`}
             onSelect={(spot) => { setZone(spot.zone); setSelectedName(spot.name); }}
           />
         </section>
@@ -140,7 +195,7 @@ export default function Home() {
               <span className="eyebrow"><Icon name="spark" /> Best window</span>
               <strong>{selected.best}</strong>
             </div>
-            <div className="window-score"><b>94</b><span>out of 100</span></div>
+            <div className="window-score"><b>{selected.score}</b><span>out of 100</span></div>
           </section>
 
           <section className="primary-card">
@@ -165,9 +220,9 @@ export default function Home() {
             </div>
 
             <div className="mini-forecast" aria-label="Hourly quality forecast">
-              <div className="forecast-labels"><span>6 AM</span><span>Now</span><span>Noon</span></div>
+              <div className="forecast-labels"><span>{hourly[0]?.time ?? "Now"}</span><span>Now</span><span>{hourly.at(-1)?.time ?? "Later"}</span></div>
               <div className="forecast-track">
-                {hourly.map((hour) => <i key={hour.time} style={{ height: `${Math.max(22, hour.score)}%` }} title={`${hour.time}: ${hour.score}/100`} />)}
+                {hourly.map((hour, index) => <i key={`${hour.time}-${index}`} style={{ height: `${Math.max(22, hour.score)}%` }} title={`${hour.time}: ${hour.score}/100`} />)}
               </div>
             </div>
 
@@ -194,8 +249,8 @@ export default function Home() {
       <section className="outlook-section">
         <div className="outlook-copy">
           <span className="eyebrow">5-day outlook</span>
-          <h2>A fresh pulse builds into Saturday.</h2>
-          <p>Morning winds remain favorable through Wednesday. Expect smaller surf Thursday before a longer-period WNW swell arrives this weekend.</p>
+          <h2>{strongestDay.day === "Today" ? "Today carries the strongest modeled pulse." : `${strongestDay.day} carries the strongest modeled pulse.`}</h2>
+          <p>These break-level estimates combine modeled swell and wind with observed buoy conditions, local tide predictions, and each spot’s exposure profile.</p>
         </div>
         <div className="day-grid">
           {days.map((day, index) => (
@@ -213,7 +268,9 @@ export default function Home() {
       <footer>
         <div><Logo /><b>San Diego Surf</b></div>
         <p>One clear read on the county’s coastline.</p>
-        <span>Forecast prototype · Sample conditions</span>
+        <span className="source-line">
+          {dataMode === "sample" ? "Sample fallback" : "Live estimates"} · Open-Meteo · CDIP/NDBC 46225 · NOAA CO-OPS
+        </span>
       </footer>
     </main>
   );

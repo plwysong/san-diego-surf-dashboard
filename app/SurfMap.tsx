@@ -38,12 +38,14 @@ export default function SurfMap({
   zone,
   selectedName,
   units,
+  swellLabel,
   onSelect,
 }: {
   spots: MapSpot[];
   zone: Zone;
   selectedName: string;
   units: "FT" | "M";
+  swellLabel: string;
   onSelect: (spot: MapSpot) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -142,7 +144,7 @@ export default function SurfMap({
 
       <div className="map-swell-card">
         <span className="swell-arrow">↗</span>
-        <span><b>WNW 285°</b><small>Primary swell</small></span>
+        <span><b>{swellLabel}</b><small>Primary swell</small></span>
       </div>
     </div>
   );
