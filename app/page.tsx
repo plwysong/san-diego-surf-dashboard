@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import SurfMap from "./SurfMap";
 
 type Zone = "North County" | "Central" | "South Bay";
 type Rating = "Excellent" | "Good" | "Fair" | "Poor";
@@ -17,20 +18,20 @@ type Spot = {
   water: string;
   crowd: string;
   best: string;
-  x: number;
-  y: number;
+  lat: number;
+  lon: number;
 };
 
 const spots: Spot[] = [
-  { name: "Trestles", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", period: "14s", wind: "2 kt E", tide: "2.4 ft rising", water: "70°", crowd: "Busy", best: "6:10–8:45 AM", x: 36, y: 12 },
-  { name: "Oceanside", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "SSW", period: "13s", wind: "3 kt ESE", tide: "2.5 ft rising", water: "70°", crowd: "Moderate", best: "6:20–9:10 AM", x: 43, y: 27 },
-  { name: "Swami’s", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6:15–9:00 AM", x: 48, y: 43 },
-  { name: "Blacks", zone: "Central", height: "4–6 ft", rating: "Excellent", swell: "WNW", period: "15s", wind: "3 kt E", tide: "2.8 ft rising", water: "69°", crowd: "Moderate", best: "6:30–9:00 AM", x: 52, y: 52 },
-  { name: "Windansea", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "W", period: "13s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Light", best: "6:45–9:20 AM", x: 49, y: 60 },
-  { name: "Tourmaline", zone: "Central", height: "2–3 ft", rating: "Good", swell: "W", period: "12s", wind: "2 kt ENE", tide: "3.0 ft rising", water: "70°", crowd: "Moderate", best: "6:25–9:15 AM", x: 50, y: 68 },
-  { name: "Ocean Beach", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "WSW", period: "13s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Light", best: "6:30–9:10 AM", x: 47, y: 76 },
-  { name: "Coronado", zone: "South Bay", height: "1–3 ft", rating: "Fair", swell: "SW", period: "12s", wind: "4 kt E", tide: "3.2 ft rising", water: "71°", crowd: "Light", best: "6:40–9:30 AM", x: 52, y: 84 },
-  { name: "Imperial Beach", zone: "South Bay", height: "2–3 ft", rating: "Poor", swell: "SW", period: "11s", wind: "4 kt ESE", tide: "3.3 ft rising", water: "71°", crowd: "Light", best: "6:30–8:40 AM", x: 49, y: 94 },
+  { name: "Trestles", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", period: "14s", wind: "2 kt E", tide: "2.4 ft rising", water: "70°", crowd: "Busy", best: "6:10–8:45 AM", lat: 33.3833, lon: -117.5937 },
+  { name: "Oceanside", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "SSW", period: "13s", wind: "3 kt ESE", tide: "2.5 ft rising", water: "70°", crowd: "Moderate", best: "6:20–9:10 AM", lat: 33.1937, lon: -117.3831 },
+  { name: "Swami’s", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6:15–9:00 AM", lat: 33.0344, lon: -117.2926 },
+  { name: "Blacks", zone: "Central", height: "4–6 ft", rating: "Excellent", swell: "WNW", period: "15s", wind: "3 kt E", tide: "2.8 ft rising", water: "69°", crowd: "Moderate", best: "6:30–9:00 AM", lat: 32.8875, lon: -117.2533 },
+  { name: "Windansea", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "W", period: "13s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Light", best: "6:45–9:20 AM", lat: 32.8313, lon: -117.2818 },
+  { name: "Tourmaline", zone: "Central", height: "2–3 ft", rating: "Good", swell: "W", period: "12s", wind: "2 kt ENE", tide: "3.0 ft rising", water: "70°", crowd: "Moderate", best: "6:25–9:15 AM", lat: 32.8057, lon: -117.2610 },
+  { name: "Ocean Beach", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "WSW", period: "13s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Light", best: "6:30–9:10 AM", lat: 32.7495, lon: -117.2526 },
+  { name: "Coronado", zone: "South Bay", height: "1–3 ft", rating: "Fair", swell: "SW", period: "12s", wind: "4 kt E", tide: "3.2 ft rising", water: "71°", crowd: "Light", best: "6:40–9:30 AM", lat: 32.6800, lon: -117.1835 },
+  { name: "Imperial Beach", zone: "South Bay", height: "2–3 ft", rating: "Poor", swell: "SW", period: "11s", wind: "4 kt ESE", tide: "3.3 ft rising", water: "71°", crowd: "Light", best: "6:30–8:40 AM", lat: 32.5791, lon: -117.1324 },
 ];
 
 const zoneDefaults: Record<Zone, string> = {
@@ -123,53 +124,14 @@ export default function Home() {
       </header>
 
       <div className="dashboard" id="top">
-        <section className="map-panel" aria-label="San Diego County surf spot map">
-          <div className="ocean-glow" />
-          <div className="map-label pacific">PACIFIC OCEAN</div>
-          <div className="map-label county">SAN DIEGO COUNTY</div>
-          <div className="map-label mexico">MEXICO</div>
-          <div className="map-label city encinitas">ENCINITAS</div>
-          <div className="map-label city lajolla">LA JOLLA</div>
-          <div className="map-label city downtown">SAN DIEGO</div>
-
-          <svg className="coast-art" viewBox="0 0 720 900" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="land" x1="0" x2="1">
-                <stop offset="0" stopColor="#dcefe6" />
-                <stop offset="1" stopColor="#f4f3e9" />
-              </linearGradient>
-            </defs>
-            <path className="land" d="M370 0C365 72 405 99 402 157c-4 74-27 112-13 174 13 54 53 89 33 152-14 45-64 58-61 112 3 61 59 82 35 139-23 56-4 104 25 166H720V0Z" />
-            <path className="coastline" d="M370 0C365 72 405 99 402 157c-4 74-27 112-13 174 13 54 53 89 33 152-14 45-64 58-61 112 3 61 59 82 35 139-23 56-4 104 25 166" />
-            <path className="border-line" d="M421 900h299" />
-            {[0,1,2,3,4].map((n) => <path key={n} className={`bathymetry b${n}`} d={`M${320-n*44} 0C${310-n*43} 100 ${353-n*45} 180 ${339-n*46} 280c-13 76 45 116 18 193-20 57-58 80-48 141 9 59 48 105 24 176-14 41-5 77 12 110`} />)}
-            <path className="terrain" d="M475 22c78 49 50 94 125 132M446 203c56 31 96 10 161 67M475 362c72-19 111 29 186 22M458 520c45 43 112 12 187 68M468 697c65-23 110 18 179 24" />
-            <path className="terrain faint" d="M527 8c52 62 30 102 104 155M511 246c78-10 101 48 173 55M502 456c62 21 86-13 154 35M525 611c51 34 84 20 137 64" />
-          </svg>
-
-          <div className="swell-direction">
-            <Icon name="arrow" />
-            <span><b>WNW 285°</b><small>Primary swell</small></span>
-          </div>
-
-          <div className="map-legend">
-            <span><i className="legend-dot excellent" /> Excellent</span>
-            <span><i className="legend-dot good" /> Good</span>
-            <span><i className="legend-dot fair" /> Fair</span>
-          </div>
-
-          {spots.map((spot) => (
-            <button
-              key={spot.name}
-              className={`spot-marker ${selected.name === spot.name ? "selected" : ""} ${spot.zone === zone ? "in-zone" : "out-zone"}`}
-              style={{ left: `${spot.x}%`, top: `${spot.y}%` }}
-              onClick={() => { setZone(spot.zone); setSelectedName(spot.name); }}
-              aria-label={`Select ${spot.name}, ${spot.height}, ${spot.rating}`}
-            >
-              <i data-rating={spot.rating.toLowerCase()} />
-              <span>{spot.name}<small>{displayHeight(spot.height)}</small></span>
-            </button>
-          ))}
+        <section className="map-panel" aria-label="Geographic San Diego County surf map">
+          <SurfMap
+            spots={spots}
+            zone={zone}
+            selectedName={selected.name}
+            units={units}
+            onSelect={(spot) => { setZone(spot.zone); setSelectedName(spot.name); }}
+          />
         </section>
 
         <aside className="conditions-panel">
