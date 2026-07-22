@@ -24,7 +24,7 @@ type HourlyData = {
 
 type ForecastResponse = { hourly?: HourlyData; error?: boolean; reason?: string };
 type TidePrediction = { t: string; v: string; type?: string };
-type ProviderStatus = { ok: boolean; detail: string };
+type ProviderStatus = { ok: boolean; detail: string; checkedAt: string; dataTimestamp?: string };
 
 const profiles: Profile[] = [
   { name: "Trestles", zone: "North County", swellTarget: 190, shoal: 1.12, tideLow: 1.0, tideHigh: 3.6 },
@@ -410,15 +410,16 @@ async function buildPayload() {
   const windLiveCount = [...zoneData.values()].filter((data) => data.windLive).length;
   const allWindLive = windLiveCount === zones.length;
   const allSupportingProvidersLive = laJollaTideResult.ok && sanDiegoTideResult.ok && buoyResult.ok;
+  const generatedAt = new Date().toISOString();
   const providers: Record<string, ProviderStatus> = {
-    marine: { ok: liveZones === 3, detail: `${liveZones}/3 forecast zones live` },
-    wind: { ok: allWindLive, detail: `${windLiveCount}/${zones.length} forecast zones live${allWindLive ? "" : "; conservative defaults used where unavailable"}` },
-    tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations live` },
-    buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 observation live" : "Using Open-Meteo wave forecast" },
+    marine: { ok: liveZones === 3, detail: `${liveZones}/3 forecast zones live`, checkedAt: generatedAt },
+    wind: { ok: allWindLive, detail: `${windLiveCount}/${zones.length} forecast zones live${allWindLive ? "" : "; conservative defaults used where unavailable"}`, checkedAt: generatedAt },
+    tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations live`, checkedAt: generatedAt },
+    buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 observation live" : "Using Open-Meteo wave forecast", checkedAt: generatedAt, dataTimestamp: buoyResult.value?.observedAt },
   };
   return {
     mode: liveZones === 3 && allWindLive && allSupportingProvidersLive ? "live" : liveZones > 0 ? "partial" : "unavailable",
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     buoy: buoyResult.value,
     conditions,
     zones: series,

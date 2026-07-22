@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import SurfMap from "./SurfMap";
 
 type Zone = "North County" | "Central" | "South Bay";
@@ -72,7 +73,7 @@ type ConditionsPayload = {
   zones?: ZoneSeries;
   buoy?: { observedAt?: string | null } | null;
   liveZones?: Zone[];
-  providers?: Record<string, { ok: boolean; detail: string }>;
+  providers?: Record<string, { ok: boolean; detail: string; checkedAt: string; dataTimestamp?: string }>;
 };
 
 function unavailableSpot(spot: Spot): Spot {
@@ -122,6 +123,7 @@ export default function Home() {
   const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "sample">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   useEffect(() => {
     const controllers = new Set<AbortController>();
@@ -178,6 +180,13 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setDetailsOpen(false); };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [detailsOpen]);
+
   const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [spots, zone]);
   const selected = spots.find((spot) => spot.name === selectedName) ?? spots[3];
   const hourly = series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
@@ -218,6 +227,7 @@ export default function Home() {
         </nav>
 
         <div className="header-tools">
+          <Link className="source-link" href="/data-sources">Data sources</Link>
           <span className={`updated ${dataMode}`} title={providerSummary}>
             <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "sample" ? `Sample fallback · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
           </span>
@@ -278,7 +288,7 @@ export default function Home() {
               </> : <p className="forecast-unavailable">Regional forecast temporarily unavailable.</p>}
             </div>
 
-            <button className="details-button">View {selected.name} details <span>→</span></button>
+            <button className="details-button" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">View {selected.name} details <span>→</span></button>
           </section>
 
           <section className="nearby-card">
@@ -320,10 +330,37 @@ export default function Home() {
       <footer>
         <div><Logo /><b>San Diego Surf</b></div>
         <p>One clear read on the county’s coastline.</p>
-        <span className="source-line">
+        <Link className="source-line" href="/data-sources">
           {dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · Open-Meteo · CDIP/NDBC 46225 · NOAA CO-OPS
-        </span>
+          <b>Source status & timestamps →</b>
+        </Link>
       </footer>
+
+      {detailsOpen && (
+        <div className="details-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetailsOpen(false); }}>
+          <section className="details-dialog" role="dialog" aria-modal="true" aria-labelledby="spot-details-title">
+            <button className="details-close" onClick={() => setDetailsOpen(false)} aria-label="Close spot details">×</button>
+            <span className="eyebrow">Spot conditions · {selected.zone}</span>
+            <div className="details-title-row">
+              <div><h2 id="spot-details-title">{selected.name}</h2><p>Modeled break estimate at {selected.lat.toFixed(4)}, {selected.lon.toFixed(4)}</p></div>
+              <span className={`rating ${selected.rating.toLowerCase()}`}>{selected.rating}</span>
+            </div>
+            <div className="details-score"><strong>{displayHeight(selected.height)}</strong><span><b>{selected.score}</b> / 100 condition score</span></div>
+            <div className="details-metrics">
+              <div><small>Primary swell</small><b>{selected.swell} · {selected.period}</b></div>
+              <div><small>Wind</small><b>{selected.wind}</b></div>
+              <div><small>Tide</small><b>{selected.tide}</b></div>
+              <div><small>Water</small><b>{selected.water}</b></div>
+              <div><small>Best modeled window</small><b>{selected.best}</b></div>
+              <div><small>Feed status</small><b>{dataMode === "loading" ? "Checking" : dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live" : "Live"}</b></div>
+            </div>
+            <div className="details-provenance">
+              <span>Dashboard updated {updatedAt ? updatedAt.toLocaleString("en-US", { timeZone: "America/Los_Angeles", dateStyle: "medium", timeStyle: "short" }) : "—"}</span>
+              <Link href="/data-sources">View source status and timestamps →</Link>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
