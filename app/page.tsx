@@ -122,6 +122,48 @@ function Logo() {
   );
 }
 
+function QualityTrend({ hours }: { hours: Array<{ time: string; score: number }> }) {
+  if (!hours.length) return <p className="forecast-unavailable">Regional forecast temporarily unavailable.</p>;
+  const width = 600;
+  const baseline = 82;
+  const top = 15;
+  const points = hours.map((hour, index) => ({
+    ...hour,
+    x: hours.length === 1 ? width / 2 : 12 + index * ((width - 24) / (hours.length - 1)),
+    y: baseline - (Math.max(0, Math.min(100, hour.score)) / 100) * (baseline - top),
+  }));
+  const line = points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
+  const area = `${line} L ${points.at(-1)?.x ?? width - 12} ${baseline} L ${points[0].x} ${baseline} Z`;
+  const peak = points.reduce((best, point) => point.score > best.score ? point : best, points[0]);
+
+  return (
+    <div className="quality-trend" aria-label={`Six-hour quality trend, peaking at ${peak.score} out of 100 around ${peak.time}`}>
+      <div className="trend-heading">
+        <span><small>Next 6 hours</small><b>Quality trend</b></span>
+        <strong>Peak {peak.score} <i>·</i> {peak.time}</strong>
+      </div>
+      <svg viewBox={`0 0 ${width} 96`} role="img" aria-hidden="true" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="qualityArea" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#0a63ee" stopOpacity=".26" />
+            <stop offset="1" stopColor="#0a63ee" stopOpacity=".015" />
+          </linearGradient>
+          <linearGradient id="qualityLine" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="#55c7d6" />
+            <stop offset=".65" stopColor="#0a63ee" />
+            <stop offset="1" stopColor="#174aaf" />
+          </linearGradient>
+        </defs>
+        <path className="trend-grid" d={`M 12 32 H ${width - 12} M 12 57 H ${width - 12} M 12 ${baseline} H ${width - 12}`} />
+        <path className="trend-area" d={area} />
+        <path className="trend-line" d={line} />
+        {points.map((point, index) => <circle key={`${point.time}-${index}`} className={point === peak ? "peak" : index === 0 ? "now" : ""} cx={point.x} cy={point.y} r={point === peak ? 5 : index === 0 ? 4 : 2.5}><title>{point.time}: {point.score}/100</title></circle>)}
+      </svg>
+      <div className="trend-axis"><span>Now · {hours[0].time}</span><span>{hours[Math.floor(hours.length / 2)]?.time}</span><span>{hours.at(-1)?.time}</span></div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [zone, setZone] = useState<Zone>("Central");
   const [selectedName, setSelectedName] = useState("Blacks");
@@ -131,7 +173,6 @@ export default function Home() {
   const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "sample">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const spotlightRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -189,13 +230,6 @@ export default function Home() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!detailsOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setDetailsOpen(false); };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [detailsOpen]);
-
   const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [spots, zone]);
   const selected = spots.find((spot) => spot.name === selectedName) ?? spots.find((spot) => spot.name === "Blacks") ?? spots[0];
   const hourly = series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
@@ -217,7 +251,6 @@ export default function Home() {
   function focusSpot(spot: { name: string; zone: Zone }) {
     setZone(spot.zone);
     setSelectedName(spot.name);
-    setDetailsOpen(false);
     window.requestAnimationFrame(() => {
       if (window.innerWidth <= 980) spotlightRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
@@ -268,15 +301,15 @@ export default function Home() {
         </section>
 
         <aside className="conditions-panel">
-          <section className="window-card">
-            <div>
-              <span className="eyebrow"><Icon name="spark" /> Best window</span>
-              <strong>{selected.best}</strong>
-            </div>
-            <div className="window-score"><b>{selected.score}</b><span>out of 100</span></div>
-          </section>
-
           <section className="primary-card spotlight-card" ref={spotlightRef} key={selected.name}>
+            <div className="spotlight-best">
+              <div>
+                <span className="eyebrow"><Icon name="spark" /> Best window</span>
+                <strong>{selected.best}</strong>
+              </div>
+              <div className="window-score"><b>{selected.score}</b><span>out of 100</span></div>
+            </div>
+
             <div className="spot-heading">
               <div>
                 <span className="location-label">{selected.zone} · California</span>
@@ -297,16 +330,7 @@ export default function Home() {
               <div><Icon name="temp" /><span><small>Water</small><b>{selected.water}</b></span></div>
             </div>
 
-            <div className="mini-forecast" aria-label="Hourly quality forecast">
-              {hourly.length ? <>
-                <div className="forecast-labels"><span>{hourly[0]?.time ?? "Now"}</span><span>Now</span><span>{hourly.at(-1)?.time ?? "Later"}</span></div>
-                <div className="forecast-track">
-                  {hourly.map((hour, index) => <i key={`${hour.time}-${index}`} style={{ height: `${Math.max(22, hour.score)}%` }} title={`${hour.time}: ${hour.score}/100`} />)}
-                </div>
-              </> : <p className="forecast-unavailable">Regional forecast temporarily unavailable.</p>}
-            </div>
-
-            <button className="details-button" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">View {selected.name} details <span>→</span></button>
+            <QualityTrend hours={hourly} />
           </section>
 
           <section className="nearby-card">
@@ -354,31 +378,6 @@ export default function Home() {
         </Link>
       </footer>
 
-      {detailsOpen && (
-        <div className="details-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setDetailsOpen(false); }}>
-          <section className="details-dialog" role="dialog" aria-modal="true" aria-labelledby="spot-details-title">
-            <button className="details-close" onClick={() => setDetailsOpen(false)} aria-label="Close spot details">×</button>
-            <span className="eyebrow">Spot conditions · {selected.zone}</span>
-            <div className="details-title-row">
-              <div><h2 id="spot-details-title">{selected.name}</h2><p>Modeled break estimate at {selected.lat.toFixed(4)}, {selected.lon.toFixed(4)}</p></div>
-              <span className={`rating ${selected.rating.toLowerCase()}`}>{selected.rating}</span>
-            </div>
-            <div className="details-score"><strong>{displayHeight(selected.height)}</strong><span><b>{selected.score}</b> / 100 condition score</span></div>
-            <div className="details-metrics">
-              <div><small>Primary swell</small><b>{selected.swell} · {selected.period}</b></div>
-              <div><small>Wind</small><b>{selected.wind}</b></div>
-              <div><small>Tide</small><b>{selected.tide}</b></div>
-              <div><small>Water</small><b>{selected.water}</b></div>
-              <div><small>Best modeled window</small><b>{selected.best}</b></div>
-              <div><small>Feed status</small><b>{dataMode === "loading" ? "Checking" : dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live" : "Live"}</b></div>
-            </div>
-            <div className="details-provenance">
-              <span>Dashboard updated {updatedAt ? updatedAt.toLocaleString("en-US", { timeZone: "America/Los_Angeles", dateStyle: "medium", timeStyle: "short" }) : "—"}</span>
-              <Link href="/data-sources">View source status and timestamps →</Link>
-            </div>
-          </section>
-        </div>
-      )}
     </main>
   );
 }
