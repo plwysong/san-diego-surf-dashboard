@@ -8,6 +8,7 @@ type ProviderStatus = {
   detail: string;
   checkedAt: string;
   dataTimestamp?: string;
+  validThrough?: string;
 };
 
 type Payload = {
@@ -18,17 +19,41 @@ type Payload = {
 };
 
 const providerInfo = {
+  mop: {
+    name: "CDIP MOP Nearshore",
+    role: "A break-adjacent wave forecast at a mapped 10-meter-depth model point for each of the dashboard’s 17 breaks.",
+    href: "https://cdip.ucsd.edu/m/documents/data_access.html",
+    link: "CDIP model data documentation",
+  },
+  cdip: {
+    name: "CDIP Local Buoys",
+    role: "Fresh San Diego-area observations used for a regional model-agreement check and the latest water temperature.",
+    href: "https://cdip.ucsd.edu/m/stn_table/",
+    link: "CDIP recent observations",
+  },
+  spectra: {
+    name: "CDIP Observed Spectral Peaks",
+    role: "Current Torrey Pines Outer wave energy by period and direction. A second peak is shown only when meaningfully separated; future days use forecast partitions instead.",
+    href: "https://cdip.ucsd.edu/m/documents/data_access.html",
+    link: "CDIP spectral access",
+  },
   marine: {
     name: "Open-Meteo Marine",
-    role: "Offshore wave height, direction, period, and swell forecast for three county zones.",
+    role: "Regional wave guidance and secondary-swell components used as an independent reference and fallback.",
     href: "https://open-meteo.com/en/docs/marine-weather-api",
     link: "Marine API documentation",
   },
   wind: {
     name: "Open-Meteo Weather",
-    role: "10-meter wind speed and direction aligned hour-by-hour with the marine forecast.",
+    role: "10-meter wind speed and direction aligned hour-by-hour with each wave forecast.",
     href: "https://open-meteo.com/en/docs",
     link: "Weather API documentation",
+  },
+  windObservation: {
+    name: "NOAA Coastal Wind",
+    role: "Latest La Jolla coastal wind observation adjusts Central County’s near-term forecast only, with the adjustment decaying over time.",
+    href: "https://tidesandcurrents.noaa.gov/met.html?id=9410230",
+    link: "La Jolla meteorological observations",
   },
   tides: {
     name: "NOAA CO-OPS",
@@ -37,8 +62,8 @@ const providerInfo = {
     link: "NOAA Tides & Currents",
   },
   buoy: {
-    name: "CDIP / NDBC 46225",
-    role: "Observed wave height, dominant period, mean wave direction, and water temperature.",
+    name: "NDBC 46225 Fallback",
+    role: "Offshore wave and water-temperature observation retained as a fallback if richer local CDIP observations are unavailable.",
     href: "https://www.ndbc.noaa.gov/station_page.php?station=46225",
     link: "Buoy 46225 station page",
   },
@@ -66,7 +91,7 @@ export default function DataSourcesPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/conditions?rev=6&view=sources", { cache: "no-store", signal: controller.signal })
+    fetch("/api/conditions?rev=11&view=sources", { cache: "no-store", signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<Payload>;
@@ -90,7 +115,7 @@ export default function DataSourcesPage() {
       <section className="sources-hero">
         <span className="eyebrow">Data provenance</span>
         <h1>Source status & timestamps</h1>
-        <p>Every surf estimate is derived from these public feeds. “Checked” is when this dashboard successfully requested the provider; “observed” is the timestamp reported by the buoy itself.</p>
+        <p>Every surf estimate is derived from these public feeds. “Checked” is when the dashboard requested the provider, “observation time” comes from a measured feed, and “forecast valid through” is the end of the model or prediction coverage used.</p>
         <div className={`sources-overall ${payload?.mode ?? (error ? "unavailable" : "loading")}`}>
           <i />
           <div><small>Current pipeline status</small><b>{overall}</b></div>
@@ -101,8 +126,9 @@ export default function DataSourcesPage() {
       <section className="provider-grid" aria-label="Live data provider status">
         {Object.entries(providerInfo).map(([key, info]) => {
           const status = payload?.providers?.[key];
+          const state = !status ? "loading" : status.ok ? "ok" : "down";
           return (
-            <article className="provider-card" key={key}>
+            <article className={`provider-card ${state}`} key={key}>
               <div className="provider-card-heading">
                 <div><span className={`provider-dot ${status?.ok ? "ok" : status ? "down" : "loading"}`} /><h2>{info.name}</h2></div>
                 <b>{status ? status.ok ? "Live" : "Degraded" : "Checking"}</b>
@@ -111,7 +137,9 @@ export default function DataSourcesPage() {
               <dl>
                 <div><dt>Status detail</dt><dd>{status?.detail ?? "Waiting for response"}</dd></div>
                 <div><dt>Last checked</dt><dd>{formatTimestamp(status?.checkedAt ?? payload?.generatedAt)}</dd></div>
-                {key === "buoy" && <div><dt>Observation time</dt><dd>{formatTimestamp(status?.dataTimestamp ?? payload?.buoy?.observedAt)}</dd></div>}
+                {status?.dataTimestamp && <div><dt>Observation time</dt><dd>{formatTimestamp(status.dataTimestamp)}</dd></div>}
+                {status?.validThrough && <div><dt>Forecast valid through</dt><dd>{formatTimestamp(status.validThrough)}</dd></div>}
+                {key === "buoy" && !status?.dataTimestamp && <div><dt>Observation time</dt><dd>{formatTimestamp(payload?.buoy?.observedAt)}</dd></div>}
               </dl>
               <a href={info.href} target="_blank" rel="noreferrer">{info.link} ↗</a>
             </article>
@@ -120,8 +148,8 @@ export default function DataSourcesPage() {
       </section>
 
       <section className="method-note">
-        <div><span className="eyebrow">How estimates are made</span><h2>Public offshore data, translated to individual breaks.</h2></div>
-        <p>Wave and wind forecasts are sampled offshore in North County, Central San Diego, and South Bay. The dashboard applies each break’s swell exposure and shoaling profile, then combines that estimate with tide and wind. These are modeled estimates—not lifeguard reports or a substitute for observing local conditions.</p>
+        <div><span className="eyebrow">How Forecast v2 works</span><h2>Nearshore guidance, checked against what the ocean is doing now.</h2></div>
+        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and an empirical break-response multiplier. The app converts nearshore significant wave height into an estimated surf range; it is not a validated breaking-face measurement. Current CDIP spectral peaks add context, regional buoy agreement affects confidence, and the La Jolla wind observation adjusts only Central County’s near-term wind. Future-day confidence is capped as the horizon grows. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
       </section>
     </main>
   );

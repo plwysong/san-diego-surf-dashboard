@@ -18,6 +18,22 @@ function localHour(offset = 0) {
 const times = Array.from({ length: 144 }, (_, index) => localHour(index));
 const filled = (value) => times.map(() => value);
 
+function utcStamp(date = new Date()) {
+  return `${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCDate()).padStart(2, "0")}.${date.getUTCFullYear()}-${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}:00`;
+}
+
+function compactUtc(date = new Date()) {
+  return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")}${String(date.getUTCHours()).padStart(2, "0")}${String(date.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+function mopCsv(station) {
+  const rows = times.filter((_, index) => index % 3 === 0).map((time, index) => {
+    const utc = new Date(`${time}:00-07:00`).toISOString();
+    return `${utc},255,${station},${(0.75 + index * .002).toFixed(3)},32.88,14,-117.26`;
+  });
+  return `time,waveDp[unit="degreeT"],station,waveHs[unit="meter"],latitude[unit="degrees_north"],waveTp[unit="second"],longitude[unit="degrees_east"]\n${rows.join("\n")}`;
+}
+
 function ndbcRow() {
   const now = new Date();
   const values = [
@@ -45,6 +61,9 @@ test("provider degradation is explicit and outages are briefly coalesced", async
           swell_wave_height: filled(1.1),
           swell_wave_direction: filled(215),
           swell_wave_period: filled(13),
+          secondary_swell_wave_height: filled(.35),
+          secondary_swell_wave_direction: filled(285),
+          secondary_swell_wave_period: filled(8),
         } });
       }
       if (url.hostname === "api.open-meteo.com") {
@@ -56,7 +75,20 @@ test("provider degradation is explicit and outages are briefly coalesced", async
         } });
       }
       if (url.hostname === "api.tidesandcurrents.noaa.gov") {
+        if (url.searchParams.get("product") === "wind") {
+          return Response.json({ data: [{ t: new Date().toISOString().slice(0, 16).replace("T", " "), s: "5.0", d: "80" }] });
+        }
         return Response.json({ predictions: [{ t: localHour().replace("T", " "), v: "2.4" }] });
+      }
+      if (url.hostname === "cdip.ucsd.edu" && url.pathname.endsWith("sccoos.cdip")) {
+        return new Response(`<pre>${utcStamp()}\t100\tTORREY PINES OUTER, CA\t32.93\t-117.392\t57196\t1.2\t14.0\t220\t20.0\n${utcStamp()}\t201\tSCRIPPS NEARSHORE, CA\t32.86785\t-117.26667\t4100\t0.8\t12.0\t250\t21.0</pre>`);
+      }
+      if (url.hostname === "cdip.ucsd.edu" && url.pathname.endsWith("ndar.cdip")) {
+        return new Response(`<pre>${compactUtc()} 20 210 40 215 80 220 120 225 160 230 210 235 260 240 40 250 20 270</pre>`);
+      }
+      if (url.hostname === "thredds.cdip.ucsd.edu") {
+        const station = url.pathname.match(/(D\d{4})_forecast/)?.[1] ?? "D0000";
+        return new Response(mopCsv(station));
       }
       if (url.hostname === "www.ndbc.noaa.gov") return new Response(ndbcRow());
       throw new Error(`Unexpected URL ${url}`);
@@ -71,6 +103,18 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     assert.equal(Object.keys(partial.dailyConditions).length, 5);
     assert.ok(Object.values(partial.dailyConditions).every((day) => day.length === 17));
     assert.ok(Object.values(partial.dailyConditions)[1][0].hourly.length > 0);
+    assert.equal(partial.providers.mop.ok, true);
+    assert.equal(partial.providers.cdip.ok, true);
+    assert.equal(partial.providers.spectra.ok, true);
+    assert.equal(partial.providers.windObservation.ok, false);
+    assert.equal(partial.providers.mop.validThrough != null, true);
+    assert.equal(partial.providers.marine.validThrough != null, true);
+    assert.match(partial.conditions[0].modelPoint, /^D\d{4}$/);
+    assert.ok(partial.conditions[0].confidenceScore >= 70);
+    assert.match(partial.conditions[0].secondarySwell, /·/);
+    const futureDays = Object.values(partial.dailyConditions);
+    assert.equal(futureDays[1][0].secondarySwell, "WNW · 8s");
+    assert.equal(futureDays.at(-1)[0].confidence, "Low");
     assert.equal(partial.providers.wind.ok, false);
     assert.match(partial.providers.wind.detail, /^2\/3 forecast zones live/);
 

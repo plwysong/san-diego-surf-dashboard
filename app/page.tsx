@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import SurfMap from "./SurfMap";
 
@@ -23,6 +23,14 @@ type Spot = {
   swellDegrees: number;
   lat: number;
   lon: number;
+  secondarySwell?: string;
+  secondarySwellSource?: string;
+  confidence?: "High" | "Medium" | "Low";
+  confidenceScore?: number;
+  confidenceReason?: string;
+  modelPoint?: string;
+  summary?: string;
+  hourly?: HourlyPoint[];
 };
 
 const initialSpots: Spot[] = [
@@ -99,6 +107,13 @@ function unavailableSpot(spot: Spot): Spot {
     water: "—",
     best: "Data unavailable",
     score: 0,
+    secondarySwell: "—",
+    confidence: "Low",
+    confidenceScore: 0,
+    confidenceReason: "Live forecast unavailable",
+    modelPoint: "Unavailable",
+    summary: "Waiting for live source data",
+    hourly: [],
   };
 }
 
@@ -140,9 +155,9 @@ function QualityTrend({ hours, future = false }: { hours: Array<{ time: string; 
   const peak = points.reduce((best, point) => point.score > best.score ? point : best, points[0]);
 
   return (
-    <div className="quality-trend" aria-label={`Six-hour quality trend, peaking at ${peak.score} out of 100 around ${peak.time}`}>
+    <div className="quality-trend" role="img" aria-label={`${future ? "Daylight" : "Next six hours"} quality trend, peaking at ${peak.score} out of 100 around ${peak.time}`}>
       <div className="trend-heading">
-        <span><small>Next 6 hours</small><b>Quality trend</b></span>
+        <span><small>{future ? "Daylight outlook" : "Next 6 hours"}</small><b>Quality trend</b></span>
         <strong>Peak {peak.score} <i>·</i> {peak.time}</strong>
       </div>
       <svg viewBox={`0 0 ${width} 96`} role="img" aria-hidden="true" preserveAspectRatio="none">
@@ -187,7 +202,7 @@ export default function Home() {
     const loadConditions = () => {
       const controller = new AbortController();
       controllers.add(controller);
-      fetch("/api/conditions?rev=9", { signal: controller.signal, cache: "no-store" })
+      fetch("/api/conditions?rev=11", { signal: controller.signal, cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`Conditions request returned ${response.status}`);
         return response.json() as Promise<ConditionsPayload>;
@@ -237,23 +252,31 @@ export default function Home() {
     };
   }, []);
 
-  const days = series[zone]?.days?.length ? series[zone].days : dataMode === "sample" ? initialDays : [];
+  const dayMetadata = series[zone]?.days?.length ? series[zone].days : dataMode === "sample" ? initialDays : [];
+  const days = dayMetadata.map((day) => {
+    const forecast = dailyConditions[day.dateKey]?.find((item) => item.name === selectedName);
+    return forecast ? {
+      ...day,
+      height: forecast.height ?? day.height,
+      rating: forecast.rating ?? day.rating,
+      period: forecast.period ?? day.period,
+    } : day;
+  });
   const activeDateKey = selectedDateKey ?? days[0]?.dateKey ?? null;
   const todayDateKey = days[0]?.dateKey ?? null;
   const isFuture = Boolean(activeDateKey && todayDateKey && activeDateKey !== todayDateKey);
   const activeDay = days.find((day) => day.dateKey === activeDateKey) ?? days[0];
-  const displayedSpots = useMemo(() => {
+  const displayedSpots = (() => {
     if (!isFuture || !activeDateKey) return spots;
     const forecast = dailyConditions[activeDateKey] ?? [];
     return spots.map((spot) => {
       const condition = forecast.find((item) => item.name === spot.name);
       return condition ? { ...spot, ...condition } : unavailableSpot(spot);
     });
-  }, [activeDateKey, dailyConditions, isFuture, spots]);
-  const zoneSpots = useMemo(() => displayedSpots.filter((spot) => spot.zone === zone), [displayedSpots, zone]);
+  })();
+  const zoneSpots = displayedSpots.filter((spot) => spot.zone === zone);
   const selected = displayedSpots.find((spot) => spot.name === selectedName) ?? displayedSpots.find((spot) => spot.name === "Blacks") ?? displayedSpots[0];
-  const selectedDaily = activeDateKey ? dailyConditions[activeDateKey]?.find((item) => item.name === selected.name) : undefined;
-  const hourly = isFuture ? selectedDaily?.hourly ?? [] : series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
+  const hourly = selected.hourly?.length ? selected.hourly : series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
   const updatedLabel = updatedAt
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).format(updatedAt)
     : "Connecting…";
@@ -267,7 +290,7 @@ export default function Home() {
     setZone(spot.zone);
     setSelectedName(spot.name);
     window.requestAnimationFrame(() => {
-      if (window.innerWidth <= 980) spotlightRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (window.innerWidth <= 1040) spotlightRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
 
@@ -288,7 +311,7 @@ export default function Home() {
 
         <nav className="zone-tabs" aria-label="Surf regions">
           {(["North County", "Central", "South Bay"] as Zone[]).map((item) => (
-            <button key={item} className={zone === item ? "active" : ""} onClick={() => selectZone(item)}>{item}</button>
+            <button key={item} className={zone === item ? "active" : ""} aria-pressed={zone === item} onClick={() => selectZone(item)}>{item}</button>
           ))}
         </nav>
 
@@ -316,10 +339,10 @@ export default function Home() {
         </section>
 
         <aside className="conditions-panel">
-          <section className="forecast-strip" aria-label={`${zone} five-day forecast`}>
+          <section className="forecast-strip" aria-label={`${selectedName} five-day forecast`}>
             <div className="forecast-strip-heading">
-              <b>5-day forecast</b>
-              <span>Select a day</span>
+              <b>{selectedName} · 5-day forecast</b>
+              <span>Best-window estimate · select a day</span>
             </div>
             <div className="day-grid">
               {days.map((day) => (
@@ -345,7 +368,7 @@ export default function Home() {
                 <span className="eyebrow"><Icon name="spark" /> {isFuture && activeDay ? `${activeDay.day}, ${activeDay.date} · ` : ""}Best window</span>
                 <strong>{selected.best}</strong>
               </div>
-              <div className="window-score"><b>{selected.score}</b><span>out of 100</span></div>
+              <div className="window-score"><b>{selected.score}</b><span>quality / 100</span></div>
             </div>
 
             <div className="spot-heading">
@@ -353,20 +376,25 @@ export default function Home() {
                 <span className="location-label">{selected.zone} · California</span>
                 <h1>{selected.name}</h1>
               </div>
-              <span className={`rating ${selected.rating.toLowerCase()}`}>{selected.rating}</span>
+              <div className="spot-badges">
+                {selected.confidence && <span className={`confidence ${selected.confidence.toLowerCase()}`}>Model confidence: {selected.confidence} · {selected.confidenceScore}/100</span>}
+                <span className={`rating ${selected.rating.toLowerCase()}`}>{selected.rating}</span>
+              </div>
             </div>
 
             <div className="wave-reading">
               <strong>{displayHeight(selected.height)}</strong>
-              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : "Modeled faces"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : "break-level estimate"}</small></span>
+              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : "Estimated surf range"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
             </div>
 
             <div className="metrics-grid">
-              <div><Icon name="wave" /><span><small>Primary swell</small><b>{selected.swell} · {selected.period}</b></span></div>
+              <div><Icon name="wave" /><span><small>{selected.modelPoint?.startsWith("D") ? "Nearshore peak waves" : "Dominant waves"}</small><b>{selected.swell} · {selected.period}</b><em>{selected.secondarySwellSource ?? "Regional forecast partition"}: {selected.secondarySwell ?? "not resolved"}</em></span></div>
               <div><Icon name="wind" /><span><small>Wind</small><b>{selected.wind}</b></span></div>
               <div><Icon name="tide" /><span><small>Tide</small><b>{selected.tide}</b></span></div>
               <div><Icon name="temp" /><span><small>{isFuture ? "Latest water" : "Water"}</small><b>{selected.water}</b></span></div>
             </div>
+
+            {selected.summary && <p className="forecast-summary">{selected.summary}<span>Confidence inputs: {selected.confidenceReason}. Coverage/agreement score—not measured accuracy or probability.</span></p>}
 
             <QualityTrend hours={hourly} future={isFuture} />
           </section>
@@ -375,7 +403,7 @@ export default function Home() {
             <div className="section-heading"><h2>{zone} spots</h2><span>{zoneSpots.length} modeled spots</span></div>
             <div className="spot-list">
               {zoneSpots.map((spot) => (
-                <button key={spot.name} className={spot.name === selected.name ? "current" : ""} onClick={() => focusSpot(spot)}>
+                <button key={spot.name} className={spot.name === selected.name ? "current" : ""} aria-current={spot.name === selected.name ? "true" : undefined} onClick={() => focusSpot(spot)} title={`${spot.confidence ?? "Low"} confidence${spot.confidenceReason ? ` · ${spot.confidenceReason}` : ""}`}>
                   <span className={`quality-dot ${spot.rating.toLowerCase()}`} />
                   <span className="list-name"><b>{spot.name}</b><small>{spot.swell} · {spot.period}</small></span>
                   <strong>{displayHeight(spot.height)}</strong>
@@ -392,7 +420,7 @@ export default function Home() {
         <div><Logo /><b>San Diego Surf</b></div>
         <p>One clear read on the county’s coastline.</p>
         <Link className="source-line" href="/data-sources">
-          {dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · Open-Meteo · CDIP/NDBC 46225 · NOAA CO-OPS
+          {dataMode === "loading" ? "Connecting to forecast sources" : dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · CDIP MOP + spectra · Open-Meteo · NOAA CO-OPS
           <b>Source status & timestamps →</b>
         </Link>
       </footer>
