@@ -75,12 +75,96 @@ const zoneLeadSpot: Record<Zone, string> = {
   "South Bay": "Coronado",
 };
 
-let cached: { expires: number; payload: unknown } | undefined;
+type ZoneForecast = { marine: HourlyData; weather: HourlyData; windLive: boolean; regionalLive: boolean };
+type CacheState = "origin" | "fresh-cache" | "stale-cache";
+type CacheMeta = { state: CacheState; storedAt: string; ageSeconds: number; refreshError?: string };
+type CacheRow = { payload: string | null; fetched_at: number; fresh_until: number; stale_until: number; refresh_lock_until: number; last_error: string | null };
+type D1ResultLike = { meta?: { changes?: number }; results?: unknown[] };
+type D1StatementLike = { bind(...values: unknown[]): D1StatementLike; run(): Promise<D1ResultLike>; first<T>(): Promise<T | null> };
+type D1DatabaseLike = { prepare(query: string): D1StatementLike };
+
+const CACHE_KEY = "san-diego-conditions-v3";
+const FRESH_TTL_MS = 60 * 60 * 1000;
+const STALE_TTL_MS = 36 * 60 * 60 * 1000;
+const REFRESH_LEASE_MS = 45 * 1000;
+
+let cached: { freshUntil: number; staleUntil: number; storedAt: number; payload: Record<string, unknown> } | undefined;
 let negativeCache: { expires: number; payload: unknown } | undefined;
 let inFlight: ReturnType<typeof buildPayload> | undefined;
 
 const n = (value: number | null | undefined, fallback = 0) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+async function durableCacheDb(): Promise<D1DatabaseLike | null> {
+  const injected = (globalThis as typeof globalThis & { __FORECAST_CACHE_DB__?: D1DatabaseLike }).__FORECAST_CACHE_DB__;
+  if (injected) return injected;
+  try {
+    const worker = await import("cloudflare:workers");
+    return (worker.env as unknown as { DB?: D1DatabaseLike }).DB ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function initializeCache(db: D1DatabaseLike) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS forecast_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload TEXT,
+    fetched_at INTEGER NOT NULL DEFAULT 0,
+    fresh_until INTEGER NOT NULL DEFAULT 0,
+    stale_until INTEGER NOT NULL DEFAULT 0,
+    refresh_lock_until INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+  )`).run();
+  await db.prepare("INSERT OR IGNORE INTO forecast_cache (cache_key) VALUES (?)").bind(CACHE_KEY).run();
+}
+
+async function readDurableCache(db: D1DatabaseLike) {
+  return db.prepare("SELECT payload, fetched_at, fresh_until, stale_until, refresh_lock_until, last_error FROM forecast_cache WHERE cache_key = ?")
+    .bind(CACHE_KEY).first<CacheRow>();
+}
+
+function parseCachedPayload(row: CacheRow | null): Record<string, unknown> | null {
+  if (!row?.payload) return null;
+  try {
+    const value = JSON.parse(row.payload);
+    return value && typeof value === "object" ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function cacheMeta(state: CacheState, storedAt: number, refreshError?: string): CacheMeta {
+  return {
+    state,
+    storedAt: new Date(storedAt).toISOString(),
+    ageSeconds: Math.max(0, Math.round((Date.now() - storedAt) / 1000)),
+    ...(refreshError ? { refreshError } : {}),
+  };
+}
+
+function payloadWithCache(payload: Record<string, unknown>, state: CacheState, storedAt: number, refreshError?: string) {
+  return { ...payload, cache: cacheMeta(state, storedAt, refreshError) };
+}
+
+async function claimRefreshLease(db: D1DatabaseLike, now: number) {
+  const result = await db.prepare("UPDATE forecast_cache SET refresh_lock_until = ?, last_attempt_at = ? WHERE cache_key = ? AND refresh_lock_until < ?")
+    .bind(now + REFRESH_LEASE_MS, now, CACHE_KEY, now).run();
+  return Number(result.meta?.changes ?? 0) > 0;
+}
+
+async function storeDurablePayload(db: D1DatabaseLike, payload: Record<string, unknown>, now: number) {
+  await db.prepare("UPDATE forecast_cache SET payload = ?, fetched_at = ?, fresh_until = ?, stale_until = ?, refresh_lock_until = 0, last_error = NULL WHERE cache_key = ?")
+    .bind(JSON.stringify(payload), now, now + FRESH_TTL_MS, now + STALE_TTL_MS, CACHE_KEY).run();
+}
+
+async function releaseRefreshLease(db: D1DatabaseLike, message: string) {
+  await db.prepare("UPDATE forecast_cache SET refresh_lock_until = 0, last_error = ? WHERE cache_key = ?")
+    .bind(message.slice(0, 240), CACHE_KEY).run();
+}
+
+const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const hasNumericValues = (values: Array<number | null> | undefined, minimumLength: number) =>
   Boolean(values && values.length >= minimumLength && values.some((value) => typeof value === "number" && Number.isFinite(value)));
@@ -556,40 +640,47 @@ function conditionSummary(profile: Profile, period: number, windSpeed: number, w
   return `${periodLabel} swell · ${windLabel} · ${tideLabel}`;
 }
 
-async function fetchZone(zone: Zone) {
-  const point = zonePoints[zone];
+async function fetchZones() {
+  const zones = Object.keys(zonePoints) as Zone[];
+  const points = zones.map((zone) => zonePoints[zone]);
   const marineUrl = new URL("https://marine-api.open-meteo.com/v1/marine");
-  marineUrl.searchParams.set("latitude", String(point.lat));
-  marineUrl.searchParams.set("longitude", String(point.lon));
+  marineUrl.searchParams.set("latitude", points.map((point) => point.lat).join(","));
+  marineUrl.searchParams.set("longitude", points.map((point) => point.lon).join(","));
   marineUrl.searchParams.set("hourly", "wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period,secondary_swell_wave_height,secondary_swell_wave_direction,secondary_swell_wave_period");
-  marineUrl.searchParams.set("timezone", "America/Los_Angeles");
+  marineUrl.searchParams.set("timezone", zones.map(() => "America/Los_Angeles").join(","));
   marineUrl.searchParams.set("forecast_days", "6");
   marineUrl.searchParams.set("cell_selection", "sea");
 
   const weatherUrl = new URL("https://api.open-meteo.com/v1/forecast");
-  weatherUrl.searchParams.set("latitude", String(point.lat));
-  weatherUrl.searchParams.set("longitude", String(point.lon));
+  weatherUrl.searchParams.set("latitude", points.map((point) => point.lat).join(","));
+  weatherUrl.searchParams.set("longitude", points.map((point) => point.lon).join(","));
   weatherUrl.searchParams.set("hourly", "wind_speed_10m,wind_direction_10m");
   weatherUrl.searchParams.set("wind_speed_unit", "kn");
-  weatherUrl.searchParams.set("timezone", "America/Los_Angeles");
+  weatherUrl.searchParams.set("timezone", zones.map(() => "America/Los_Angeles").join(","));
   weatherUrl.searchParams.set("forecast_days", "6");
 
   const [marineResult, weatherResult] = await Promise.allSettled([
-    fetchJson<ForecastResponse>(`Open-Meteo marine (${zone})`, marineUrl.toString()),
-    fetchJson<ForecastResponse>(`Open-Meteo wind (${zone})`, weatherUrl.toString()),
+    fetchJson<ForecastResponse[]>("Open-Meteo marine (3-zone batch)", marineUrl.toString()),
+    fetchJson<ForecastResponse[]>("Open-Meteo wind (3-zone batch)", weatherUrl.toString()),
   ]);
 
-  if (marineResult.status === "rejected" || !marineResult.value.hourly || !hasUsableMarineForecast(marineResult.value.hourly)) {
-    throw marineResult.status === "rejected" ? marineResult.reason : new Error(`Open-Meteo marine (${zone}): empty forecast`);
-  }
-
-  const marine = marineResult.value.hourly;
-  const alignedWeather = weatherResult.status === "fulfilled" && weatherResult.value.hourly
-    ? alignWeatherToMarine(marine.time, weatherResult.value.hourly)
-    : null;
-  const windLive = Boolean(alignedWeather?.usable);
-  const weather = windLive ? alignedWeather!.hourly : { time: marine.time };
-  return { marine, weather, windLive };
+  const marineResponses = marineResult.status === "fulfilled" ? marineResult.value : [];
+  const weatherResponses = weatherResult.status === "fulfilled" ? weatherResult.value : [];
+  const forecasts = new Map<Zone, ZoneForecast>();
+  zones.forEach((zone, index) => {
+    const marine = marineResponses[index]?.hourly;
+    if (!marine || !hasUsableMarineForecast(marine)) return;
+    const weatherHourly = weatherResponses[index]?.hourly;
+    const alignedWeather = weatherHourly ? alignWeatherToMarine(marine.time, weatherHourly) : null;
+    const windLive = Boolean(alignedWeather?.usable);
+    forecasts.set(zone, {
+      marine,
+      weather: windLive ? alignedWeather!.hourly : { time: marine.time },
+      windLive,
+      regionalLive: true,
+    });
+  });
+  return forecasts;
 }
 
 async function fetchTides(station: string) {
@@ -763,8 +854,11 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
 
 async function buildPayload() {
   const zones = Object.keys(zonePoints) as Zone[];
-  const [zoneResults, laJollaTideResult, sanDiegoTideResult, buoyResult, cdipResult, spectrumResult, windObservationResult, mopResults] = await Promise.all([
-    Promise.allSettled(zones.map((zone) => fetchZone(zone))),
+  const [regionalForecastResult, laJollaTideResult, sanDiegoTideResult, buoyResult, cdipResult, spectrumResult, windObservationResult, mopResults] = await Promise.all([
+    fetchZones().then((value) => ({ ok: true as const, value })).catch((error) => {
+      console.error(`[conditions] Open-Meteo batch unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
+      return { ok: false as const, value: new Map<Zone, ZoneForecast>() };
+    }),
     fetchTides("9410230").then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const, value: [] as TidePrediction[] })),
     fetchTides("9410170").then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const, value: [] as TidePrediction[] })),
     fetchBuoy().then((value) => ({ ok: true as const, value })).catch((error) => {
@@ -789,20 +883,26 @@ async function buildPayload() {
   const laJollaTides = laJollaTideResult.value;
   const sanDiegoTides = sanDiegoTideResult.value;
 
-  const zoneData = new Map<Zone, Awaited<ReturnType<typeof fetchZone>>>();
-  zoneResults.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      const value = result.value;
-      zoneData.set(zones[index], windObservationResult.value && value.windLive
-        ? { ...value, weather: correctWindForecast(value.weather, windObservationResult.value, zones[index]) }
-        : value);
-    }
-  });
-
   const mopBySpot = new Map<string, HourlyData>();
   mopResults.forEach((result, index) => {
     if (result.status === "fulfilled") mopBySpot.set(profiles[index].name, result.value);
     else console.error(`[conditions] CDIP MOP ${profiles[index].mopId} unavailable`);
+  });
+
+  const zoneData = new Map<Zone, ZoneForecast>();
+  zones.forEach((zone) => {
+    const regional = regionalForecastResult.value.get(zone);
+    if (regional) {
+      zoneData.set(zone, windObservationResult.value && regional.windLive
+        ? { ...regional, weather: correctWindForecast(regional.weather, windObservationResult.value, zone) }
+        : regional);
+      return;
+    }
+    const lead = profiles.find((profile) => profile.name === zoneLeadSpot[zone]);
+    const mop = lead ? mopBySpot.get(lead.name) : undefined;
+    if (mop?.time.length) {
+      zoneData.set(zone, { marine: mop, weather: { time: mop.time }, windLive: false, regionalLive: false });
+    }
   });
   const spectrumByZone = new Map<Zone, CdipSpectrum>();
   if (spectrumResult.value) {
@@ -894,6 +994,7 @@ async function buildPayload() {
   })]));
 
   const liveZones = zoneData.size;
+  const regionalMarineLiveCount = [...zoneData.values()].filter((data) => data.regionalLive).length;
   const windLiveCount = [...zoneData.values()].filter((data) => data.windLive).length;
   const allWindLive = windLiveCount === zones.length;
   const mopLiveCount = mopBySpot.size;
@@ -908,14 +1009,14 @@ async function buildPayload() {
     mop: { ok: mopLiveCount === profiles.length, detail: `${mopLiveCount}/${profiles.length} break-adjacent CDIP model points live`, checkedAt: generatedAt, validThrough: mopValidThrough },
     cdip: { ok: cdipResult.ok, detail: cdipResult.ok ? `${cdipResult.value.length} fresh San Diego-area buoy observations` : "Nearshore observation feed unavailable", checkedAt: generatedAt, dataTimestamp: cdipResult.value[0]?.observedAt },
     spectra: { ok: spectrumResult.ok, detail: spectrumResult.ok ? "Torrey Pines Outer observed spectral peaks live; forecast partitions used for future days" : "Using regional forecast wave partitions", checkedAt: generatedAt, dataTimestamp: spectrumResult.value?.observedAt },
-    marine: { ok: liveZones === 3, detail: `${liveZones}/3 regional forecast zones live with secondary-swell components`, checkedAt: generatedAt, validThrough: marineValidThrough },
+    marine: { ok: regionalMarineLiveCount === 3, detail: regionalMarineLiveCount === 3 ? "3/3 regional forecast zones live with secondary-swell components" : `${regionalMarineLiveCount}/3 regional zones live; CDIP nearshore forecasts cover ${liveZones}/3 zones`, checkedAt: generatedAt, validThrough: marineValidThrough },
     wind: { ok: allWindLive, detail: `${windLiveCount}/${zones.length} forecast zones live${allWindLive ? "" : "; conservative defaults used where unavailable"}`, checkedAt: generatedAt, validThrough: windValidThrough },
     windObservation: { ok: centralWindAdjusted, detail: centralWindAdjusted ? "La Jolla observation adjusts Central County wind only, with time decay" : "Using uncorrected forecast wind", checkedAt: generatedAt, dataTimestamp: windObservationResult.value?.observedAt },
     tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations live`, checkedAt: generatedAt, validThrough: tideValidThrough },
     buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 fallback observation live" : "CDIP observations are primary", checkedAt: generatedAt, dataTimestamp: buoyResult.value?.observedAt },
   };
   return {
-    mode: liveZones === 3 && allWindLive && allSupportingProvidersLive ? "live" : liveZones > 0 ? "partial" : "unavailable",
+    mode: regionalMarineLiveCount === 3 && allWindLive && allSupportingProvidersLive ? "live" : liveZones > 0 ? "partial" : "unavailable",
     generatedAt,
     buoy: buoyResult.value,
     conditions,
@@ -934,28 +1035,101 @@ async function buildPayload() {
 }
 
 export async function GET() {
-  if (cached && cached.expires > Date.now()) {
-    return Response.json(cached.payload, { headers: { "Cache-Control": "public, s-maxage=900, stale-while-revalidate=1800", "X-Data-Cache": "HIT" } });
+  const now = Date.now();
+  const cacheHeaders = (state: string, cacheControl = "public, s-maxage=900, stale-while-revalidate=86400") => ({
+    "Cache-Control": cacheControl,
+    "X-Data-Cache": state,
+  });
+  if (cached && cached.freshUntil > now) {
+    return Response.json(payloadWithCache(cached.payload, "fresh-cache", cached.storedAt), { headers: cacheHeaders("MEMORY-HIT") });
   }
-  if (negativeCache && negativeCache.expires > Date.now()) {
+  if (negativeCache && negativeCache.expires > now && !cached) {
     return Response.json(negativeCache.payload, { headers: { "Cache-Control": "no-store", "X-Data-Cache": "NEGATIVE-HIT" } });
+  }
+
+  let db: D1DatabaseLike | null = null;
+  let durableRow: CacheRow | null = null;
+  try {
+    db = await durableCacheDb();
+    if (db) {
+      await initializeCache(db);
+      durableRow = await readDurableCache(db);
+      const durablePayload = parseCachedPayload(durableRow);
+      if (durablePayload && durableRow && durableRow.fresh_until > now) {
+        cached = { freshUntil: durableRow.fresh_until, staleUntil: durableRow.stale_until, storedAt: durableRow.fetched_at, payload: durablePayload };
+        return Response.json(payloadWithCache(durablePayload, "fresh-cache", durableRow.fetched_at), { headers: cacheHeaders("DURABLE-HIT") });
+      }
+    }
+  } catch (error) {
+    console.error(`[conditions] durable cache read failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    db = null;
+  }
+
+  const durableStale = durableRow && durableRow.stale_until > now ? parseCachedPayload(durableRow) : null;
+  const memoryStale = cached && cached.staleUntil > now ? cached.payload : null;
+  const stalePayload = durableStale ?? memoryStale;
+  const staleStoredAt = durableStale && durableRow ? durableRow.fetched_at : cached?.storedAt ?? now;
+
+  if (db) {
+    try {
+      const ownsRefresh = await claimRefreshLease(db, now);
+      if (!ownsRefresh) {
+        if (stalePayload) {
+          return Response.json(payloadWithCache(stalePayload, "stale-cache", staleStoredAt, durableRow?.last_error ?? "Refresh already in progress"), { headers: cacheHeaders("STALE-WHILE-REFRESH") });
+        }
+        for (let attempt = 0; attempt < 16; attempt++) {
+          await delay(500);
+          const waitingRow = await readDurableCache(db);
+          const waitingPayload = parseCachedPayload(waitingRow);
+          if (waitingPayload && waitingRow) {
+            const state: CacheState = waitingRow.fresh_until > Date.now() ? "fresh-cache" : "stale-cache";
+            return Response.json(payloadWithCache(waitingPayload, state, waitingRow.fetched_at, waitingRow.last_error ?? undefined), { headers: cacheHeaders("DURABLE-WAIT-HIT") });
+          }
+        }
+        const waitingPayload = { mode: "unavailable", generatedAt: new Date().toISOString(), conditions: [], zones: {}, providers: {}, sources: [], cache: { state: "origin", storedAt: new Date().toISOString(), ageSeconds: 0, refreshError: "Forecast refresh is still in progress" } };
+        return Response.json(waitingPayload, { headers: cacheHeaders("REFRESH-IN-PROGRESS", "no-store") });
+      }
+    } catch (error) {
+      console.error(`[conditions] durable refresh lease failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      db = null;
+    }
   }
 
   try {
     inFlight ??= buildPayload().finally(() => { inFlight = undefined; });
     const payload = await inFlight;
     if (payload.mode !== "unavailable") {
-      cached = { expires: Date.now() + 15 * 60 * 1000, payload };
+      const storedAt = Date.now();
+      const record = payload as unknown as Record<string, unknown>;
+      cached = { freshUntil: storedAt + FRESH_TTL_MS, staleUntil: storedAt + STALE_TTL_MS, storedAt, payload: record };
+      if (db) {
+        try { await storeDurablePayload(db, record, storedAt); }
+        catch (error) { console.error(`[conditions] durable cache write failed: ${error instanceof Error ? error.message : "unknown error"}`); }
+      }
       negativeCache = undefined;
+      return Response.json(payloadWithCache(record, "origin", storedAt), { headers: cacheHeaders("REFRESH") });
     } else {
       negativeCache = { expires: Date.now() + 20 * 1000, payload };
+      const message = "No usable regional or CDIP nearshore forecast was available";
+      if (db) {
+        try { await releaseRefreshLease(db, message); }
+        catch (error) { console.error(`[conditions] durable cache release failed: ${error instanceof Error ? error.message : "unknown error"}`); }
+      }
+      if (stalePayload) {
+        return Response.json(payloadWithCache(stalePayload, "stale-cache", staleStoredAt, message), { headers: cacheHeaders("STALE-IF-ERROR") });
+      }
+      return Response.json(payload, { headers: cacheHeaders("MISS-UNAVAILABLE", "no-store") });
     }
-    const cacheControl = payload.mode === "unavailable"
-      ? "no-store"
-      : "public, s-maxage=900, stale-while-revalidate=1800";
-    return Response.json(payload, { headers: { "Cache-Control": cacheControl, "X-Data-Cache": "MISS" } });
   } catch (error) {
-    console.error(`[conditions] payload build failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    const message = error instanceof Error ? error.message : "unknown error";
+    console.error(`[conditions] payload build failed: ${message}`);
+    if (db) {
+      try { await releaseRefreshLease(db, message); }
+      catch (releaseError) { console.error(`[conditions] durable cache release failed: ${releaseError instanceof Error ? releaseError.message : "unknown error"}`); }
+    }
+    if (stalePayload) {
+      return Response.json(payloadWithCache(stalePayload, "stale-cache", staleStoredAt, message), { headers: cacheHeaders("STALE-IF-ERROR") });
+    }
     return Response.json({ mode: "unavailable", generatedAt: new Date().toISOString(), conditions: [], zones: {}, providers: {}, sources: [] }, { status: 200, headers: { "Cache-Control": "no-store" } });
   }
 }

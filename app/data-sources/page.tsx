@@ -14,6 +14,7 @@ type ProviderStatus = {
 type Payload = {
   mode: "live" | "partial" | "unavailable";
   generatedAt: string;
+  cache?: { state: "origin" | "fresh-cache" | "stale-cache"; storedAt: string; ageSeconds: number; refreshError?: string };
   providers?: Record<string, ProviderStatus>;
   buoy?: { observedAt?: string | null } | null;
 };
@@ -103,7 +104,7 @@ export default function DataSourcesPage() {
     return () => controller.abort();
   }, []);
 
-  const overall = error ? "Unavailable" : !payload ? "Checking" : payload.mode === "live" ? "All systems live" : payload.mode === "partial" ? "Partial live data" : "Live feed unavailable";
+  const overall = error ? "Unavailable" : !payload ? "Checking" : payload.cache?.state === "stale-cache" ? "Last successful forecast" : payload.mode === "live" ? "All systems live" : payload.mode === "partial" ? "Partial live data" : "Live feed unavailable";
 
   return (
     <main className="sources-page">
@@ -119,8 +120,9 @@ export default function DataSourcesPage() {
         <div className={`sources-overall ${payload?.mode ?? (error ? "unavailable" : "loading")}`}>
           <i />
           <div><small>Current pipeline status</small><b>{overall}</b></div>
-          <time>{payload ? `Dashboard generated ${formatTimestamp(payload.generatedAt)}` : error ? "Automatic retry occurs on the next request" : "Contacting providers…"}</time>
+          <time>{payload ? `${payload.cache?.state === "stale-cache" ? "Forecast stored" : "Dashboard generated"} ${formatTimestamp(payload.generatedAt)}` : error ? "Automatic retry occurs on the next request" : "Contacting providers…"}</time>
         </div>
+        {payload?.cache?.state === "stale-cache" && <p className="sources-cache-note">A provider refresh is delayed, so the dashboard is serving the most recent successful real forecast instead of sample data. {payload.cache.refreshError ?? "Refresh will retry automatically."}</p>}
       </section>
 
       <section className="provider-grid" aria-label="Live data provider status">

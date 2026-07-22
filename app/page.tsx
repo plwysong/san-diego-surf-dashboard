@@ -87,6 +87,7 @@ type ZoneSeries = Record<string, {
 type ConditionsPayload = {
   mode: "live" | "partial" | "unavailable";
   generatedAt: string;
+  cache?: { state: "origin" | "fresh-cache" | "stale-cache"; storedAt: string; ageSeconds: number; refreshError?: string };
   conditions?: Array<Partial<Spot> & { name: string }>;
   dailyConditions?: Record<string, DailyCondition[]>;
   zones?: ZoneSeries;
@@ -190,7 +191,7 @@ export default function Home() {
   const [series, setSeries] = useState<ZoneSeries>({});
   const [dailyConditions, setDailyConditions] = useState<Record<string, DailyCondition[]>>({});
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
-  const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "sample">("loading");
+  const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "cached" | "sample">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
   const spotlightRef = useRef<HTMLElement>(null);
@@ -218,10 +219,13 @@ export default function Home() {
           setSeries(payload.zones ?? {});
           setDailyConditions(payload.dailyConditions ?? {});
           setSelectedDateKey((current) => current && payload.dailyConditions?.[current] ? current : null);
-          setDataMode(payload.mode);
+          setDataMode(payload.cache?.state === "stale-cache" ? "cached" : payload.mode);
           const providers = Object.entries(payload.providers ?? {});
           const liveCount = providers.filter(([, status]) => status.ok).length;
-          setProviderSummary(providers.length ? `${liveCount}/${providers.length} live data services. ${providers.map(([name, status]) => `${name}: ${status.detail}`).join(" · ")}` : "Live forecast data.");
+          const cacheNote = payload.cache?.state === "stale-cache"
+            ? `Showing the last successful forecast while sources refresh${payload.cache.refreshError ? `: ${payload.cache.refreshError}` : "."} `
+            : "";
+          setProviderSummary(providers.length ? `${cacheNote}${liveCount}/${providers.length} live data services at the stored forecast time. ${providers.map(([name, status]) => `${name}: ${status.detail}`).join(" · ")}` : "Live forecast data.");
         } else {
           setDataMode("sample");
           setProviderSummary("The live marine forecast could not be reached. Retrying on the next page load; these values are clearly marked sample data.");
@@ -318,7 +322,7 @@ export default function Home() {
         <div className="header-tools">
           <Link className="source-link" href="/data-sources">Data sources</Link>
           <span className={`updated ${dataMode}`} title={providerSummary}>
-            <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "sample" ? `Sample fallback · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
+            <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "sample" ? `Sample fallback · ${updatedLabel}` : dataMode === "cached" ? `Cached forecast · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
           </span>
           <button className="unit-toggle" onClick={() => setUnits(units === "FT" ? "M" : "FT")} aria-label="Toggle wave height units">
             <b>{units}</b><span>{units === "FT" ? "M" : "FT"}</span>
@@ -420,7 +424,7 @@ export default function Home() {
         <div><Logo /><b>San Diego Surf</b></div>
         <p>One clear read on the county’s coastline.</p>
         <Link className="source-line" href="/data-sources">
-          {dataMode === "loading" ? "Connecting to forecast sources" : dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · CDIP MOP + spectra · Open-Meteo · NOAA CO-OPS
+          {dataMode === "loading" ? "Connecting to forecast sources" : dataMode === "sample" ? "Sample fallback" : dataMode === "cached" ? "Last successful forecast" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · CDIP MOP + spectra · Open-Meteo · NOAA CO-OPS
           <b>Source status & timestamps →</b>
         </Link>
       </footer>

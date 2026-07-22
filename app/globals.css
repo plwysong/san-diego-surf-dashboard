@@ -42,6 +42,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(10,99,238,.42); 
 .updated i { width: 7px; height: 7px; border-radius: 50%; background: #3bc16d; box-shadow: 0 0 0 4px #ddf6e5; }
 .updated.loading i { background: #6fa9dd; box-shadow: 0 0 0 4px #e2eef8; animation: data-pulse 1.2s ease-in-out infinite; }
 .updated.partial i { background: #e4a239; box-shadow: 0 0 0 4px #faefd9; }
+.updated.cached i { background: #3b82c4; box-shadow: 0 0 0 4px #dfedf8; }
 .updated.sample i { background: #a8b1b8; box-shadow: 0 0 0 4px #e9edef; }
 @keyframes data-pulse { 50% { opacity: .35; transform: scale(.72); } }
 .unit-toggle { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: white; cursor: pointer; }
@@ -193,6 +194,7 @@ footer > div { display: flex; align-items: center; gap: 8px; color: var(--ink); 
 .sources-overall.partial { border-color: #ead0a6; background: #fff7e8; }.sources-overall.unavailable { border-color: #e6c2be; background: #fbefed; }.sources-overall.loading { border-color: #c8ddec; background: #eef6fc; }
 .sources-overall > i { width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 5px rgba(22,128,84,.12); }.sources-overall.partial > i { background: var(--fair); }.sources-overall.unavailable > i { background: var(--poor); }.sources-overall.loading > i { background: #6fa9dd; }
 .sources-overall > div { display: flex; flex-direction: column; }.sources-overall small { color: #71817b; font-size: 8px; text-transform: uppercase; letter-spacing: .1em; }.sources-overall b { margin-top: 3px; font-size: 13px; }.sources-overall time { color: #64766f; font-size: 10px; }
+.sources-cache-note { max-width: 920px; margin: 10px 0 0; padding: 12px 15px; border: 1px solid #c7ddef; border-radius: 10px; color: #355c79; background: #edf6fc; font-size: 11px; line-height: 1.5; }
 .provider-grid { padding: 0 max(5vw, 28px) 78px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .provider-card { padding: 24px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 17px; background: white; box-shadow: 0 8px 30px rgba(22,65,80,.04); }
 .provider-card-heading, .provider-card-heading > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }.provider-card-heading > div { justify-content: flex-start; }

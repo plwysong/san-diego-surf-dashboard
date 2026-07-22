@@ -50,10 +50,13 @@ function ndbcRow() {
 test("provider degradation is explicit and outages are briefly coalesced", async () => {
   const originalFetch = globalThis.fetch;
   try {
+    let marineCalls = 0;
+    let weatherCalls = 0;
     globalThis.fetch = async (input) => {
       const url = new URL(String(input));
       if (url.hostname === "marine-api.open-meteo.com") {
-        return Response.json({ hourly: {
+        marineCalls += 1;
+        const forecast = { hourly: {
           time: times,
           wave_height: filled(1.2),
           wave_direction: filled(220),
@@ -64,15 +67,17 @@ test("provider degradation is explicit and outages are briefly coalesced", async
           secondary_swell_wave_height: filled(.35),
           secondary_swell_wave_direction: filled(285),
           secondary_swell_wave_period: filled(8),
-        } });
+        } };
+        return Response.json([forecast, forecast, forecast]);
       }
       if (url.hostname === "api.open-meteo.com") {
-        const central = url.searchParams.get("latitude") === "32.89";
-        return Response.json({ hourly: central ? { time: times } : {
+        weatherCalls += 1;
+        const healthy = { hourly: {
           time: times,
           wind_speed_10m: filled(5),
           wind_direction_10m: filled(90),
-        } });
+        } };
+        return Response.json([healthy, { hourly: { time: times } }, healthy]);
       }
       if (url.hostname === "api.tidesandcurrents.noaa.gov") {
         if (url.searchParams.get("product") === "wind") {
@@ -98,6 +103,8 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     const partialResponse = await partialRoute.GET();
     const partial = await partialResponse.json();
     assert.equal(partial.mode, "partial");
+    assert.equal(marineCalls, 1);
+    assert.equal(weatherCalls, 1);
     assert.deepEqual(partial.liveZones, ["North County", "Central", "South Bay"]);
     assert.equal(partial.conditions.length, 17);
     assert.equal(Object.keys(partial.dailyConditions).length, 5);
@@ -132,6 +139,72 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     assert.equal(second.headers.get("x-data-cache"), "NEGATIVE-HIT");
     assert.equal(outageCalls, callsAfterFirst);
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("durable cache serves fresh and stale real forecasts without repeating provider calls", async () => {
+  const originalFetch = globalThis.fetch;
+  const storedPayload = {
+    mode: "partial",
+    generatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    conditions: [{ name: "Blacks", height: "3–5 ft" }],
+    dailyConditions: {},
+    zones: {},
+    liveZones: ["Central"],
+    providers: {},
+    sources: [],
+  };
+  const row = {
+    payload: JSON.stringify(storedPayload),
+    fetched_at: Date.now() - 30 * 60 * 1000,
+    fresh_until: Date.now() + 30 * 60 * 1000,
+    stale_until: Date.now() + 24 * 60 * 60 * 1000,
+    refresh_lock_until: 0,
+    last_error: null,
+  };
+  const fakeDb = {
+    prepare(query) {
+      const statement = {
+        values: [],
+        bind(...values) { this.values = values; return this; },
+        async first() { return { ...row }; },
+        async run() {
+          if (query.startsWith("UPDATE forecast_cache SET refresh_lock_until")) {
+            return { meta: { changes: row.refresh_lock_until < Date.now() ? 1 : 0 } };
+          }
+          return { meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+
+  try {
+    let providerCalls = 0;
+    globalThis.fetch = async () => { providerCalls += 1; throw new Error("provider should not be called"); };
+    globalThis.__FORECAST_CACHE_DB__ = fakeDb;
+
+    const freshRoute = await import(`../app/api/conditions/route.ts?durable-fresh=${Date.now()}`);
+    const freshResponse = await freshRoute.GET();
+    const fresh = await freshResponse.json();
+    assert.equal(fresh.cache.state, "fresh-cache");
+    assert.equal(fresh.conditions[0].name, "Blacks");
+    assert.equal(freshResponse.headers.get("x-data-cache"), "DURABLE-HIT");
+    assert.equal(providerCalls, 0);
+
+    row.fresh_until = Date.now() - 1;
+    row.refresh_lock_until = Date.now() + 60_000;
+    row.last_error = "Open-Meteo HTTP 429";
+    const staleRoute = await import(`../app/api/conditions/route.ts?durable-stale=${Date.now()}`);
+    const staleResponse = await staleRoute.GET();
+    const stale = await staleResponse.json();
+    assert.equal(stale.cache.state, "stale-cache");
+    assert.match(stale.cache.refreshError, /429/);
+    assert.equal(staleResponse.headers.get("x-data-cache"), "STALE-WHILE-REFRESH");
+    assert.equal(providerCalls, 0);
+  } finally {
+    delete globalThis.__FORECAST_CACHE_DB__;
     globalThis.fetch = originalFetch;
   }
 });
