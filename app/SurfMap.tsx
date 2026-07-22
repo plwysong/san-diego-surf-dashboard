@@ -99,9 +99,12 @@ export default function SurfMap({
       return nums.length === 2 ? `${(nums[0] * .3048).toFixed(1)}–${(nums[1] * .3048).toFixed(1)} m` : height;
     };
 
+    const activeSpots = spots.filter((spot) => spot.zone === zone);
     spots.forEach((spot) => {
       const selected = spot.name === selectedName;
       const activeZone = spot.zone === zone;
+      const activeIndex = activeSpots.findIndex((activeSpot) => activeSpot.name === spot.name);
+      const tooltipDirection = activeIndex % 2 === 1 && !selected ? "left" : "right";
       const marker = L.circleMarker([spot.lat, spot.lon], {
         radius: selected ? 9 : activeZone ? 6 : 4,
         color: "#fff",
@@ -114,8 +117,8 @@ export default function SurfMap({
         marker.bindTooltip(`<b>${spot.name}</b><span>${formatHeight(spot.height)}</span>`, {
           permanent: true,
           interactive: true,
-          direction: "right",
-          offset: [9, 0],
+          direction: tooltipDirection,
+          offset: [tooltipDirection === "left" ? -9 : 9, 0],
           className: selected ? "surf-tooltip selected" : "surf-tooltip",
         });
       }

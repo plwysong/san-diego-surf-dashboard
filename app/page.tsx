@@ -28,11 +28,19 @@ type Spot = {
 const initialSpots: Spot[] = [
   { name: "Trestles", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", swellDegrees: 195, period: "14s", wind: "2 kt E", tide: "2.4 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 82, lat: 33.3833, lon: -117.5937 },
   { name: "Oceanside", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "SSW", swellDegrees: 195, period: "13s", wind: "3 kt ESE", tide: "2.5 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 66, lat: 33.1937, lon: -117.3831 },
+  { name: "Tamarack", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 245, period: "13s", wind: "3 kt E", tide: "2.6 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 65, lat: 33.1477, lon: -117.3508 },
+  { name: "Ponto", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 245, period: "13s", wind: "3 kt E", tide: "2.6 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 67, lat: 33.0916, lon: -117.3160 },
+  { name: "Grandview", zone: "North County", height: "2–4 ft", rating: "Good", swell: "SW", swellDegrees: 230, period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 73, lat: 33.0774, lon: -117.3086 },
   { name: "Swami’s", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", swellDegrees: 195, period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 81, lat: 33.0344, lon: -117.2926 },
+  { name: "Cardiff Reef", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SW", swellDegrees: 225, period: "14s", wind: "2 kt E", tide: "2.8 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 79, lat: 33.0134, lon: -117.2850 },
+  { name: "Del Mar", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 255, period: "13s", wind: "3 kt E", tide: "2.8 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 68, lat: 32.9595, lon: -117.2686 },
   { name: "Blacks", zone: "Central", height: "4–6 ft", rating: "Excellent", swell: "WNW", swellDegrees: 285, period: "15s", wind: "3 kt E", tide: "2.8 ft rising", water: "69°", crowd: "Moderate", best: "6 AM–9 AM", score: 94, lat: 32.8875, lon: -117.2533 },
+  { name: "La Jolla Shores", zone: "Central", height: "1–3 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "12s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Busy", best: "6 AM–9 AM", score: 61, lat: 32.8570, lon: -117.2571 },
   { name: "Windansea", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "13s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Light", best: "6 AM–9 AM", score: 64, lat: 32.8313, lon: -117.2818 },
   { name: "Tourmaline", zone: "Central", height: "2–3 ft", rating: "Good", swell: "W", swellDegrees: 270, period: "12s", wind: "2 kt ENE", tide: "3.0 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 72, lat: 32.8057, lon: -117.2610 },
+  { name: "Crystal Pier", zone: "Central", height: "2–3 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "12s", wind: "3 kt E", tide: "3.0 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 64, lat: 32.7976, lon: -117.2574 },
   { name: "Ocean Beach", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 248, period: "13s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Light", best: "6 AM–9 AM", score: 63, lat: 32.7495, lon: -117.2526 },
+  { name: "Sunset Cliffs", zone: "Central", height: "3–5 ft", rating: "Good", swell: "WSW", swellDegrees: 255, period: "14s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 76, lat: 32.7202, lon: -117.2572 },
   { name: "Coronado", zone: "South Bay", height: "1–3 ft", rating: "Fair", swell: "SW", swellDegrees: 225, period: "12s", wind: "4 kt E", tide: "3.2 ft rising", water: "71°", crowd: "Light", best: "6 AM–9 AM", score: 59, lat: 32.6800, lon: -117.1835 },
   { name: "Imperial Beach", zone: "South Bay", height: "2–3 ft", rating: "Poor", swell: "SW", swellDegrees: 225, period: "11s", wind: "4 kt ESE", tide: "3.3 ft rising", water: "71°", crowd: "Light", best: "6 AM–9 AM", score: 43, lat: 32.5791, lon: -117.1324 },
 ];
@@ -189,7 +197,7 @@ export default function Home() {
   }, [detailsOpen]);
 
   const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [spots, zone]);
-  const selected = spots.find((spot) => spot.name === selectedName) ?? spots[3];
+  const selected = spots.find((spot) => spot.name === selectedName) ?? spots.find((spot) => spot.name === "Blacks") ?? spots[0];
   const hourly = series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
   const days = series[zone]?.days?.length ? series[zone].days : dataMode === "sample" ? initialDays : [];
   const strongestDay = days.length ? days.reduce((best, day) => {

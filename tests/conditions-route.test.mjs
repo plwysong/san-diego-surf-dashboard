@@ -67,7 +67,7 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     const partial = await partialResponse.json();
     assert.equal(partial.mode, "partial");
     assert.deepEqual(partial.liveZones, ["North County", "Central", "South Bay"]);
-    assert.equal(partial.conditions.length, 9);
+    assert.equal(partial.conditions.length, 17);
     assert.equal(partial.providers.wind.ok, false);
     assert.match(partial.providers.wind.detail, /^2\/3 forecast zones live/);
 
