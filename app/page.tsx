@@ -62,22 +62,25 @@ const initialHourly = [
 ];
 
 const initialDays = [
-  { day: "Today", date: "Jul 21", height: "4–6 ft", rating: "Good", period: "15s" },
-  { day: "Wed", date: "Jul 22", height: "3–5 ft", rating: "Good", period: "14s" },
-  { day: "Thu", date: "Jul 23", height: "2–4 ft", rating: "Fair", period: "12s" },
-  { day: "Fri", date: "Jul 24", height: "3–4 ft", rating: "Fair", period: "13s" },
-  { day: "Sat", date: "Jul 25", height: "4–6 ft", rating: "Good", period: "16s" },
+  { dateKey: "2026-07-21", day: "Today", date: "Jul 21", height: "4–6 ft", rating: "Good", period: "15s" },
+  { dateKey: "2026-07-22", day: "Wed", date: "Jul 22", height: "3–5 ft", rating: "Good", period: "14s" },
+  { dateKey: "2026-07-23", day: "Thu", date: "Jul 23", height: "2–4 ft", rating: "Fair", period: "12s" },
+  { dateKey: "2026-07-24", day: "Fri", date: "Jul 24", height: "3–4 ft", rating: "Fair", period: "13s" },
+  { dateKey: "2026-07-25", day: "Sat", date: "Jul 25", height: "4–6 ft", rating: "Good", period: "16s" },
 ];
 
+type HourlyPoint = { time: string; height: number; wind: number; score: number };
+type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[] };
 type ZoneSeries = Record<string, {
-  hourly?: Array<{ time: string; height: number; wind: number; score: number }>;
-  days?: Array<{ day: string; date: string; height: string; rating: Rating; period: string }>;
+  hourly?: HourlyPoint[];
+  days?: Array<{ dateKey: string; day: string; date: string; height: string; rating: Rating; period: string }>;
 }>;
 
 type ConditionsPayload = {
   mode: "live" | "partial" | "unavailable";
   generatedAt: string;
   conditions?: Array<Partial<Spot> & { name: string }>;
+  dailyConditions?: Record<string, DailyCondition[]>;
   zones?: ZoneSeries;
   buoy?: { observedAt?: string | null } | null;
   liveZones?: Zone[];
@@ -122,7 +125,7 @@ function Logo() {
   );
 }
 
-function QualityTrend({ hours }: { hours: Array<{ time: string; score: number }> }) {
+function QualityTrend({ hours, future = false }: { hours: Array<{ time: string; score: number }>; future?: boolean }) {
   if (!hours.length) return <p className="forecast-unavailable">Regional forecast temporarily unavailable.</p>;
   const width = 600;
   const baseline = 82;
@@ -159,7 +162,7 @@ function QualityTrend({ hours }: { hours: Array<{ time: string; score: number }>
         <path className="trend-line" d={line} />
         {points.map((point, index) => <circle key={`${point.time}-${index}`} className={point === peak ? "peak" : index === 0 ? "now" : ""} cx={point.x} cy={point.y} r={point === peak ? 5 : index === 0 ? 4 : 2.5}><title>{point.time}: {point.score}/100</title></circle>)}
       </svg>
-      <div className="trend-axis"><span>Now · {hours[0].time}</span><span>{hours[Math.floor(hours.length / 2)]?.time}</span><span>{hours.at(-1)?.time}</span></div>
+      <div className="trend-axis"><span>{future ? hours[0].time : `Now · ${hours[0].time}`}</span><span>{hours[Math.floor(hours.length / 2)]?.time}</span><span>{hours.at(-1)?.time}</span></div>
     </div>
   );
 }
@@ -170,6 +173,8 @@ export default function Home() {
   const [units, setUnits] = useState<"FT" | "M">("FT");
   const [spots, setSpots] = useState(initialSpots);
   const [series, setSeries] = useState<ZoneSeries>({});
+  const [dailyConditions, setDailyConditions] = useState<Record<string, DailyCondition[]>>({});
+  const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
   const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "sample">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
@@ -182,7 +187,7 @@ export default function Home() {
     const loadConditions = () => {
       const controller = new AbortController();
       controllers.add(controller);
-      fetch("/api/conditions?rev=5", { signal: controller.signal, cache: "no-store" })
+      fetch("/api/conditions?rev=9", { signal: controller.signal, cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`Conditions request returned ${response.status}`);
         return response.json() as Promise<ConditionsPayload>;
@@ -196,6 +201,8 @@ export default function Home() {
             return condition && liveZones.has(spot.zone) ? { ...spot, ...condition } : unavailableSpot(spot);
           }));
           setSeries(payload.zones ?? {});
+          setDailyConditions(payload.dailyConditions ?? {});
+          setSelectedDateKey((current) => current && payload.dailyConditions?.[current] ? current : null);
           setDataMode(payload.mode);
           const providers = Object.entries(payload.providers ?? {});
           const liveCount = providers.filter(([, status]) => status.ok).length;
@@ -230,15 +237,23 @@ export default function Home() {
     };
   }, []);
 
-  const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [spots, zone]);
-  const selected = spots.find((spot) => spot.name === selectedName) ?? spots.find((spot) => spot.name === "Blacks") ?? spots[0];
-  const hourly = series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
   const days = series[zone]?.days?.length ? series[zone].days : dataMode === "sample" ? initialDays : [];
-  const strongestDay = days.length ? days.reduce((best, day) => {
-    const bestHigh = Number(best.height.match(/\d+/g)?.at(-1) ?? 0);
-    const dayHigh = Number(day.height.match(/\d+/g)?.at(-1) ?? 0);
-    return dayHigh > bestHigh ? day : best;
-  }, days[0]) : null;
+  const activeDateKey = selectedDateKey ?? days[0]?.dateKey ?? null;
+  const todayDateKey = days[0]?.dateKey ?? null;
+  const isFuture = Boolean(activeDateKey && todayDateKey && activeDateKey !== todayDateKey);
+  const activeDay = days.find((day) => day.dateKey === activeDateKey) ?? days[0];
+  const displayedSpots = useMemo(() => {
+    if (!isFuture || !activeDateKey) return spots;
+    const forecast = dailyConditions[activeDateKey] ?? [];
+    return spots.map((spot) => {
+      const condition = forecast.find((item) => item.name === spot.name);
+      return condition ? { ...spot, ...condition } : unavailableSpot(spot);
+    });
+  }, [activeDateKey, dailyConditions, isFuture, spots]);
+  const zoneSpots = useMemo(() => displayedSpots.filter((spot) => spot.zone === zone), [displayedSpots, zone]);
+  const selected = displayedSpots.find((spot) => spot.name === selectedName) ?? displayedSpots.find((spot) => spot.name === "Blacks") ?? displayedSpots[0];
+  const selectedDaily = activeDateKey ? dailyConditions[activeDateKey]?.find((item) => item.name === selected.name) : undefined;
+  const hourly = isFuture ? selectedDaily?.hourly ?? [] : series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
   const updatedLabel = updatedAt
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).format(updatedAt)
     : "Connecting…";
@@ -291,7 +306,7 @@ export default function Home() {
       <div className="dashboard" id="top">
         <section className="map-panel" aria-label="Geographic San Diego County surf map">
           <SurfMap
-            spots={spots}
+            spots={displayedSpots}
             zone={zone}
             selectedName={selected.name}
             units={units}
@@ -301,10 +316,33 @@ export default function Home() {
         </section>
 
         <aside className="conditions-panel">
+          <section className="forecast-strip" aria-label={`${zone} five-day forecast`}>
+            <div className="forecast-strip-heading">
+              <b>5-day forecast</b>
+              <span>Select a day</span>
+            </div>
+            <div className="day-grid">
+              {days.map((day) => (
+                <button
+                  key={day.dateKey}
+                  className={`day-card ${day.dateKey === activeDateKey ? "selected" : ""}`}
+                  onClick={() => setSelectedDateKey(day.dateKey)}
+                  aria-pressed={day.dateKey === activeDateKey}
+                  aria-label={`${day.day}, ${day.date}: ${day.height}, ${day.period} period, ${day.rating}`}
+                  title={`${day.period} period · ${day.rating}`}
+                >
+                  <span><b>{day.day}</b><small>{day.date}</small></span>
+                  <strong>{displayHeight(day.height)}</strong>
+                  <i className={day.rating.toLowerCase()} aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          </section>
+
           <section className="primary-card spotlight-card" ref={spotlightRef} key={selected.name}>
             <div className="spotlight-best">
               <div>
-                <span className="eyebrow"><Icon name="spark" /> Best window</span>
+                <span className="eyebrow"><Icon name="spark" /> {isFuture && activeDay ? `${activeDay.day}, ${activeDay.date} · ` : ""}Best window</span>
                 <strong>{selected.best}</strong>
               </div>
               <div className="window-score"><b>{selected.score}</b><span>out of 100</span></div>
@@ -327,10 +365,10 @@ export default function Home() {
               <div><Icon name="wave" /><span><small>Primary swell</small><b>{selected.swell} · {selected.period}</b></span></div>
               <div><Icon name="wind" /><span><small>Wind</small><b>{selected.wind}</b></span></div>
               <div><Icon name="tide" /><span><small>Tide</small><b>{selected.tide}</b></span></div>
-              <div><Icon name="temp" /><span><small>Water</small><b>{selected.water}</b></span></div>
+              <div><Icon name="temp" /><span><small>{isFuture ? "Latest water" : "Water"}</small><b>{selected.water}</b></span></div>
             </div>
 
-            <QualityTrend hours={hourly} />
+            <QualityTrend hours={hourly} future={isFuture} />
           </section>
 
           <section className="nearby-card">
@@ -349,25 +387,6 @@ export default function Home() {
           </section>
         </aside>
       </div>
-
-      <section className="outlook-section">
-        <div className="outlook-copy">
-          <span className="eyebrow">{zone} regional outlook</span>
-          <h2>{strongestDay ? strongestDay.day === "Today" ? "Today carries the strongest modeled pulse." : `${strongestDay.day} carries the strongest modeled pulse.` : "Regional outlook temporarily unavailable."}</h2>
-          <p>These regional estimates combine modeled swell and wind with observed buoy conditions, local tide predictions, and representative break exposure.</p>
-        </div>
-        <div className="day-grid">
-          {days.map((day, index) => (
-            <article key={day.day} className={index === 0 ? "today" : ""}>
-              <div><b>{day.day}</b><span>{day.date}</span></div>
-              <Icon name="wave" />
-              <strong>{displayHeight(day.height)}</strong>
-              <span>{day.period} period</span>
-              <i className={day.rating.toLowerCase()}>{day.rating}</i>
-            </article>
-          ))}
-        </div>
-      </section>
 
       <footer>
         <div><Logo /><b>San Diego Surf</b></div>

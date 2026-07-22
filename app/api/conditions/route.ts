@@ -340,6 +340,7 @@ function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, ti
     }));
     const parsed = new Date(`${date}T12:00:00-07:00`);
     return {
+      dateKey: date,
       day: date === today ? "Today" : new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/Los_Angeles" }).format(parsed),
       date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }).format(parsed),
       height: face.label,
@@ -348,6 +349,63 @@ function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, ti
     };
   });
   return { hourly, days };
+}
+
+function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], date: string, waterF: number | null) {
+  const candidates = marine.time.map((time, index) => ({ time, index }))
+    .filter(({ time }) => time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19)
+    .map(({ index }) => index);
+  if (!candidates.length) return null;
+
+  const scoreAt = (index: number) => {
+    const height = n(marine.swell_wave_height?.[index], n(marine.wave_height?.[index], 1));
+    const direction = n(marine.swell_wave_direction?.[index], n(marine.wave_direction?.[index], 260));
+    const period = n(marine.swell_wave_period?.[index], n(marine.wave_period?.[index], 10));
+    const wind = n(weather.wind_speed_10m?.[index], 8);
+    const windDirection = n(weather.wind_direction_10m?.[index], 270);
+    const tide = closestTide(tides, marine.time[index]).value;
+    const face = spotHeight(profile, height, direction);
+    return scoreConditions(profile, period, wind, windDirection, tide, (face.low + face.high) / 2);
+  };
+
+  const scores = candidates.map(scoreAt);
+  let bestOffset = 0;
+  let bestAverage = -1;
+  for (let offset = 0; offset < Math.max(1, candidates.length - 2); offset++) {
+    const slice = scores.slice(offset, offset + 3);
+    const average = slice.reduce((sum, value) => sum + value, 0) / slice.length;
+    if (average > bestAverage) { bestAverage = average; bestOffset = offset; }
+  }
+  const index = candidates[Math.min(bestOffset + 1, candidates.length - 1)];
+  const swellHeight = n(marine.swell_wave_height?.[index], n(marine.wave_height?.[index], 1));
+  const swellDirection = n(marine.swell_wave_direction?.[index], n(marine.wave_direction?.[index], 260));
+  const period = n(marine.swell_wave_period?.[index], n(marine.wave_period?.[index], 10));
+  const windSpeed = n(weather.wind_speed_10m?.[index], 8);
+  const windDirection = n(weather.wind_direction_10m?.[index], 270);
+  const tide = closestTide(tides, marine.time[index]);
+  const face = spotHeight(profile, swellHeight, swellDirection);
+  const endIndex = candidates[Math.min(bestOffset + 3, candidates.length - 1)];
+  const chartIndexes = candidates.filter((_, position) => position % 2 === 0).slice(0, 7);
+
+  return {
+    name: profile.name,
+    height: face.label,
+    rating: rating(Math.round(bestAverage)),
+    score: Math.round(bestAverage),
+    swell: cardinal(swellDirection),
+    swellDegrees: Math.round(swellDirection),
+    period: `${Math.round(period)}s`,
+    wind: `${Math.round(windSpeed)} kt ${cardinal(windDirection)}`,
+    tide: `${tide.value.toFixed(1)} ft ${tide.trend}`,
+    water: waterF == null ? "—" : `${waterF}°`,
+    best: `${formatHour(marine.time[candidates[bestOffset]])}–${formatHour(marine.time[endIndex])}`,
+    hourly: chartIndexes.map((hourIndex) => ({
+      time: formatHour(marine.time[hourIndex]),
+      height: n(marine.swell_wave_height?.[hourIndex], n(marine.wave_height?.[hourIndex], 1)) * 3.28084,
+      wind: Math.round(n(weather.wind_speed_10m?.[hourIndex], 8)),
+      score: scoreAt(hourIndex),
+    })),
+  };
 }
 
 async function buildPayload() {
@@ -414,6 +472,19 @@ async function buildPayload() {
     return [[zone, buildZoneSeries(zone, data.marine, data.weather, tides)]];
   }));
 
+  const firstLiveZone = zones.find((zone) => zoneData.has(zone));
+  const dailyDateKeys = firstLiveZone
+    ? [...new Set(zoneData.get(firstLiveZone)!.marine.time.slice(currentIndex(zoneData.get(firstLiveZone)!.marine.time)).map((time) => time.slice(0, 10)))].slice(0, 5)
+    : [];
+  const waterF = buoyResult.value?.waterC != null ? Math.round(buoyResult.value.waterC * 9 / 5 + 32) : null;
+  const dailyConditions = Object.fromEntries(dailyDateKeys.map((date) => [date, profiles.flatMap((profile) => {
+    const data = zoneData.get(profile.zone);
+    if (!data) return [];
+    const tides = profile.zone === "South Bay" ? sanDiegoTides : laJollaTides;
+    const forecast = buildDailySpot(profile, data.marine, data.weather, tides, date, waterF);
+    return forecast ? [forecast] : [];
+  })]));
+
   const liveZones = zoneData.size;
   const windLiveCount = [...zoneData.values()].filter((data) => data.windLive).length;
   const allWindLive = windLiveCount === zones.length;
@@ -430,6 +501,7 @@ async function buildPayload() {
     generatedAt,
     buoy: buoyResult.value,
     conditions,
+    dailyConditions,
     zones: series,
     liveZones: [...zoneData.keys()],
     providers,
