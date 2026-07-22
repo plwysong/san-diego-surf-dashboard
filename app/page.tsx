@@ -11,6 +11,7 @@ type Spot = {
   name: string;
   zone: Zone;
   height: string;
+  sets?: string;
   rating: Rating;
   swell: string;
   period: string;
@@ -29,6 +30,7 @@ type Spot = {
   confidenceScore?: number;
   confidenceReason?: string;
   modelPoint?: string;
+  windSource?: "Open-Meteo" | "NWS" | "Unavailable";
   summary?: string;
   hourly?: HourlyPoint[];
 };
@@ -77,11 +79,11 @@ const initialDays = [
   { dateKey: "2026-07-25", day: "Sat", date: "Jul 25", height: "4–6 ft", rating: "Good", period: "16s" },
 ];
 
-type HourlyPoint = { time: string; height: number; wind: number; score: number };
+type HourlyPoint = { time: string; height: number; wind: number | null; score: number };
 type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[] };
 type ZoneSeries = Record<string, {
   hourly?: HourlyPoint[];
-  days?: Array<{ dateKey: string; day: string; date: string; height: string; rating: Rating; period: string }>;
+  days?: Array<{ dateKey: string; day: string; date: string; height: string; sets?: string; rating: Rating; period: string }>;
 }>;
 
 type ConditionsPayload = {
@@ -203,7 +205,7 @@ export default function Home() {
     const loadConditions = () => {
       const controller = new AbortController();
       controllers.add(controller);
-      fetch("/api/conditions?rev=11", { signal: controller.signal, cache: "no-store" })
+      fetch("/api/conditions?rev=12", { signal: controller.signal, cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`Conditions request returned ${response.status}`);
         return response.json() as Promise<ConditionsPayload>;
@@ -388,12 +390,12 @@ export default function Home() {
 
             <div className="wave-reading">
               <strong>{displayHeight(selected.height)}</strong>
-              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : "Estimated surf range"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
+              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : "Typical modeled faces"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.sets ? `Larger sets ${displayHeight(selected.sets)}` : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
             </div>
 
             <div className="metrics-grid">
               <div><Icon name="wave" /><span><small>{selected.modelPoint?.startsWith("D") ? "Nearshore peak waves" : "Dominant waves"}</small><b>{selected.swell} · {selected.period}</b><em>{selected.secondarySwellSource ?? "Regional forecast partition"}: {selected.secondarySwell ?? "not resolved"}</em></span></div>
-              <div><Icon name="wind" /><span><small>Wind</small><b>{selected.wind}</b></span></div>
+              <div><Icon name="wind" /><span><small>Wind · {selected.windSource ?? "forecast"}</small><b>{selected.wind}</b></span></div>
               <div><Icon name="tide" /><span><small>Tide</small><b>{selected.tide}</b></span></div>
               <div><Icon name="temp" /><span><small>{isFuture ? "Latest water" : "Water"}</small><b>{selected.water}</b></span></div>
             </div>

@@ -33,8 +33,8 @@ const providerInfo = {
     link: "CDIP recent observations",
   },
   spectra: {
-    name: "CDIP Observed Spectral Peaks",
-    role: "Current Torrey Pines Outer wave energy by period and direction. A second peak is shown only when meaningfully separated; future days use forecast partitions instead.",
+    name: "CDIP Spectral Components",
+    role: "Break-adjacent forecast energy is separated into long-, mid-, and short-period components so a long-period swell is not hidden by a larger short-period peak.",
     href: "https://cdip.ucsd.edu/m/documents/data_access.html",
     link: "CDIP spectral access",
   },
@@ -45,10 +45,10 @@ const providerInfo = {
     link: "Marine API documentation",
   },
   wind: {
-    name: "Open-Meteo Weather",
-    role: "10-meter wind speed and direction aligned hour-by-hour with each wave forecast.",
-    href: "https://open-meteo.com/en/docs",
-    link: "Weather API documentation",
+    name: "Open-Meteo + NWS Wind",
+    role: "10-meter wind is aligned hour-by-hour from Open-Meteo, with the National Weather Service used automatically if that feed is rate-limited.",
+    href: "https://www.weather.gov/documentation/services-web-api",
+    link: "NWS API documentation",
   },
   windObservation: {
     name: "NOAA Coastal Wind",
@@ -92,7 +92,7 @@ export default function DataSourcesPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/conditions?rev=11&view=sources", { cache: "no-store", signal: controller.signal })
+    fetch("/api/conditions?rev=12&view=sources", { cache: "no-store", signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<Payload>;
@@ -150,8 +150,8 @@ export default function DataSourcesPage() {
       </section>
 
       <section className="method-note">
-        <div><span className="eyebrow">How Forecast v2 works</span><h2>Nearshore guidance, checked against what the ocean is doing now.</h2></div>
-        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and an empirical break-response multiplier. The app converts nearshore significant wave height into an estimated surf range; it is not a validated breaking-face measurement. Current CDIP spectral peaks add context, regional buoy agreement affects confidence, and the La Jolla wind observation adjusts only Central County’s near-term wind. Future-day confidence is capped as the horizon grows. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
+        <div><span className="eyebrow">How Forecast v3 works</span><h2>Nearshore spectral guidance, checked against what the ocean is doing now.</h2></div>
+        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and an empirical break-response multiplier. Long-, mid-, and short-period energy is transformed separately using direction and period, then recombined into typical modeled faces and a larger-set range. Tide values are interpolated to the forecast time; missing wind is labeled instead of invented. Regional buoy agreement affects confidence, and the La Jolla wind observation adjusts only Central County’s near-term wind. Future-day confidence is capped as the horizon grows. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
       </section>
     </main>
   );

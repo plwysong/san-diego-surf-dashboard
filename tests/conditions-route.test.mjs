@@ -34,6 +34,28 @@ function mopCsv(station) {
   return `time,waveDp[unit="degreeT"],station,waveHs[unit="meter"],latitude[unit="degrees_north"],waveTp[unit="second"],longitude[unit="degrees_east"]\n${rows.join("\n")}`;
 }
 
+function mopSpectralCsv(station) {
+  const rows = times.filter((_, index) => index % 3 === 0).map((time, index) => {
+    const utc = new Date(`${time}:00-07:00`).toISOString();
+    const futurePulse = index >= 8;
+    const energy = Array.from({ length: 28 }, (_, band) => {
+      if (futurePulse) return band <= 6 ? 1.8 : .025;
+      return band >= 13 ? .7 : .035;
+    });
+    const directions = Array.from({ length: 28 }, (_, band) => band <= 6 ? 220 : band < 13 ? 250 : 280);
+    return `${utc},${futurePulse ? 220 : 280},${station},${futurePulse ? "1.300" : ".900"},32.88,${futurePulse ? 20 : 8},-117.26,${energy.join(" ")},${directions.join(" ")}`;
+  });
+  return `time,waveDp[unit="degreeT"],station,waveHs[unit="meter"],latitude[unit="degrees_north"],waveTp[unit="second"],longitude[unit="degrees_east"],waveEnergyDensity[unit="meter^2 second"],waveMeanDirection[unit="degreeT"]\n${rows.join("\n")}`;
+}
+
+function nwsPeriods() {
+  return times.map((time) => ({
+    startTime: new Date(`${time}:00-07:00`).toISOString(),
+    windSpeed: "5 mph",
+    windDirection: "E",
+  }));
+}
+
 function ndbcRow() {
   const now = new Date();
   const values = [
@@ -205,6 +227,101 @@ test("durable cache serves fresh and stale real forecasts without repeating prov
     assert.equal(providerCalls, 0);
   } finally {
     delete globalThis.__FORECAST_CACHE_DB__;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("spectral forecasts preserve long-period swell, publish sets, and use NWS wind fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "marine-api.open-meteo.com") {
+        const forecast = { hourly: {
+          time: times,
+          wave_height: filled(1.1), wave_direction: filled(265), wave_period: filled(10),
+          swell_wave_height: filled(.9), swell_wave_direction: filled(250), swell_wave_period: filled(13),
+          secondary_swell_wave_height: filled(.4), secondary_swell_wave_direction: filled(220), secondary_swell_wave_period: filled(20),
+        } };
+        return Response.json([forecast, forecast, forecast]);
+      }
+      if (url.hostname === "api.open-meteo.com") return Response.json([{ hourly: { time: times } }, { hourly: { time: times } }, { hourly: { time: times } }]);
+      if (url.hostname === "api.weather.gov" && url.pathname.startsWith("/points/")) return Response.json({ properties: { forecastHourly: "https://api.weather.gov/gridpoints/SGX/1,1/forecast/hourly" } });
+      if (url.hostname === "api.weather.gov") return Response.json({ properties: { periods: nwsPeriods() } });
+      if (url.hostname === "api.tidesandcurrents.noaa.gov") {
+        if (url.searchParams.get("product") === "wind") return Response.json({ data: [] });
+        return Response.json({ predictions: [
+          { t: localHour(-1).replace("T", " "), v: "1.0" },
+          { t: localHour(1).replace("T", " "), v: "3.0" },
+          { t: localHour(2).replace("T", " "), v: "4.0" },
+        ] });
+      }
+      if (url.hostname === "cdip.ucsd.edu" && url.pathname.endsWith("sccoos.cdip")) return new Response(`<pre>${utcStamp()}\t100\tTORREY PINES OUTER, CA\t32.93\t-117.392\t57196\t1.1\t13.0\t235\t20.0</pre>`);
+      if (url.hostname === "cdip.ucsd.edu" && url.pathname.endsWith("ndar.cdip")) return new Response(`<pre>${compactUtc()} 20 210 40 215 80 220 120 225 160 230 210 235 260 240 40 250 20 270</pre>`);
+      if (url.hostname === "thredds.cdip.ucsd.edu") {
+        const station = url.pathname.match(/(D\d{4})_forecast/)?.[1] ?? "D0000";
+        return new Response(mopSpectralCsv(station));
+      }
+      if (url.hostname === "www.ndbc.noaa.gov") return new Response(ndbcRow());
+      throw new Error(`Unexpected URL ${url}`);
+    };
+
+    const route = await import(`../app/api/conditions/route.ts?spectral=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+    assert.equal(payload.mode, "live");
+    assert.match(payload.providers.mop.detail, /7 include forecast spectral partitions/);
+    assert.match(payload.providers.wind.detail, /North County: NWS/);
+    const currentOb = payload.conditions.find((spot) => spot.name === "Ocean Beach");
+    assert.equal(currentOb.windSource, "NWS");
+    assert.match(currentOb.wind, /^4 kt E$/);
+    assert.match(currentOb.tide, /^2\.0 ft rising$/);
+    const tomorrowKey = Object.keys(payload.dailyConditions)[1];
+    const futureOb = payload.dailyConditions[tomorrowKey].find((spot) => spot.name === "Ocean Beach");
+    assert.ok(Number.parseInt(futureOb.period) >= 14);
+    assert.match(futureOb.swell, /S|SW/);
+    const typicalHigh = Number(futureOb.height.match(/\d+/g).at(-1));
+    const setHigh = Number(futureOb.sets.match(/\d+/g).at(-1));
+    assert.ok(setHigh > typicalHigh);
+    assert.equal(futureOb.secondarySwellSource, "CDIP spectrum");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("each MOP spot survives independently and missing wind is never fabricated", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "marine-api.open-meteo.com" || url.hostname === "api.open-meteo.com" || url.hostname === "api.weather.gov") throw new Error("forecast provider offline");
+      if (url.hostname === "api.tidesandcurrents.noaa.gov") {
+        if (url.searchParams.get("product") === "wind") return Response.json({ data: [] });
+        return Response.json({ predictions: [
+          { t: localHour(-1).replace("T", " "), v: "1.0" },
+          { t: localHour(1).replace("T", " "), v: "3.0" },
+        ] });
+      }
+      if (url.hostname === "thredds.cdip.ucsd.edu") {
+        const station = url.pathname.match(/(D\d{4})_forecast/)?.[1] ?? "D0000";
+        if (station === "D0708") throw new Error("Swami's point unavailable");
+        return new Response(mopCsv(station));
+      }
+      if (url.hostname === "www.ndbc.noaa.gov") return new Response(ndbcRow());
+      throw new Error("supporting observation unavailable");
+    };
+
+    const route = await import(`../app/api/conditions/route.ts?per-spot=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+    assert.equal(payload.mode, "partial");
+    assert.equal(payload.conditions.length, 16);
+    assert.ok(payload.conditions.some((spot) => spot.name === "Trestles"));
+    assert.ok(!payload.conditions.some((spot) => spot.name === "Swami’s"));
+    const trestles = payload.conditions.find((spot) => spot.name === "Trestles");
+    assert.equal(trestles.wind, "Forecast unavailable");
+    assert.ok(trestles.score >= 18);
+    assert.doesNotMatch(trestles.best, /No daylight|9 PM|10 PM|11 PM/);
+    assert.match(payload.providers.wind.detail, /missing wind is shown as unavailable, never fabricated/);
+  } finally {
     globalThis.fetch = originalFetch;
   }
 });
