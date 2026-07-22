@@ -113,6 +113,7 @@ export default function SurfMap({
       if (activeZone || selected) {
         marker.bindTooltip(`<b>${spot.name}</b><span>${formatHeight(spot.height)}</span>`, {
           permanent: true,
+          interactive: true,
           direction: "right",
           offset: [9, 0],
           className: selected ? "surf-tooltip selected" : "surf-tooltip",

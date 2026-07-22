@@ -61,10 +61,12 @@ button { color: inherit; }
 .real-map .leaflet-control-attribution { padding: 3px 7px; color: #6f8088; background: rgba(250,252,248,.8); font-size: 8px; backdrop-filter: blur(7px); }
 .real-map .leaflet-control-attribution a { color: #476c7c; }
 .real-map .leaflet-interactive { transition: fill-opacity .16s ease, stroke-width .16s ease; cursor: pointer; }
-.surf-tooltip.leaflet-tooltip { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid rgba(112,143,151,.4); border-radius: 7px; color: #183348; background: rgba(252,255,252,.92); box-shadow: 0 4px 14px rgba(34,74,86,.14); font-size: 10px; backdrop-filter: blur(8px); }
+.surf-tooltip.leaflet-tooltip { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid rgba(112,143,151,.4); border-radius: 7px; color: #183348; background: rgba(252,255,252,.92); box-shadow: 0 4px 14px rgba(34,74,86,.14); cursor: pointer; font-size: 10px; pointer-events: auto !important; user-select: none; backdrop-filter: blur(8px); transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
 .surf-tooltip.leaflet-tooltip::before { display: none; }
 .surf-tooltip b { font-weight: 740; }.surf-tooltip span { color: #75858f; font-size: 9px; }
+.surf-tooltip.leaflet-tooltip:hover { border-color: rgba(10,99,238,.65); background: white; box-shadow: 0 8px 24px rgba(10,99,238,.18); }
 .surf-tooltip.selected.leaflet-tooltip { color: white; border-color: var(--blue); background: var(--blue); box-shadow: 0 7px 22px rgba(10,99,238,.27); }
+.surf-tooltip.selected.leaflet-tooltip:hover { background: #0758d6; }
 .surf-tooltip.selected span { color: rgba(255,255,255,.78); }
 .real-map-legend { top: 18px; left: 63px; padding: 9px 11px; border: 1px solid rgba(87,127,138,.24); border-radius: 9px; background: rgba(251,253,249,.88); box-shadow: 0 5px 18px rgba(34,74,86,.08); backdrop-filter: blur(9px); }
 .map-reference-card { position: absolute; z-index: 800; top: 18px; right: 18px; padding: 11px 13px; display: flex; flex-direction: column; border: 1px solid rgba(87,127,138,.24); border-radius: 11px; background: rgba(251,253,249,.9); box-shadow: 0 7px 22px rgba(34,74,86,.1); backdrop-filter: blur(10px); }
@@ -118,6 +120,14 @@ button { color: inherit; }
 .window-score b { font-size: 25px; color: var(--lime); }.window-score span { width: 31px; color: #b8cee1; font-size: 8px; line-height: 1.15; text-transform: uppercase; }
 
 .primary-card { margin-top: 12px; padding: 18px; }
+.primary-card.spotlight-card { margin-top: 15px; position: relative; overflow: hidden; border-color: rgba(10,99,238,.3); background: radial-gradient(circle at 100% 0, rgba(10,99,238,.105), transparent 34%), linear-gradient(150deg, #fff 0%, #fbfdff 64%, #f4f8ff 100%); box-shadow: 0 20px 55px rgba(8,55,105,.14), 0 3px 12px rgba(10,99,238,.07); animation: spotlight-enter .28s ease-out; }
+.primary-card.spotlight-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, #67d4dc, var(--blue) 55%, #174aaf); }
+.primary-card.spotlight-card::after { content: ""; width: 110px; height: 110px; position: absolute; top: -60px; right: -35px; border: 18px solid rgba(10,99,238,.055); border-radius: 50%; pointer-events: none; }
+.primary-card.spotlight-card > * { position: relative; z-index: 1; }
+.primary-card.spotlight-card .spot-heading { margin-top: 5px; }
+.primary-card.spotlight-card .wave-reading { margin: 20px -2px 0; padding: 14px 13px; border: 1px solid rgba(10,99,238,.1); border-radius: 13px; background: rgba(255,255,255,.66); }
+.primary-card.spotlight-card .details-button { box-shadow: 0 10px 24px rgba(10,99,238,.25); }
+@keyframes spotlight-enter { from { opacity: .76; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 .spot-heading { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
 .location-label { color: #83919d; font-size: 9px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .spot-heading h1 { margin: 2px 0 0; font-size: 30px; line-height: 1; letter-spacing: -.055em; }

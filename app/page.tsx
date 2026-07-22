@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import SurfMap from "./SurfMap";
 
@@ -124,6 +124,7 @@ export default function Home() {
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const spotlightRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const controllers = new Set<AbortController>();
@@ -205,6 +206,15 @@ export default function Home() {
     setSelectedName(zoneDefaults[next]);
   }
 
+  function focusSpot(spot: { name: string; zone: Zone }) {
+    setZone(spot.zone);
+    setSelectedName(spot.name);
+    setDetailsOpen(false);
+    window.requestAnimationFrame(() => {
+      if (window.innerWidth <= 980) spotlightRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   const displayHeight = (height: string) => {
     if (units === "FT") return height;
     const nums = height.match(/\d+/g)?.map(Number) ?? [];
@@ -245,7 +255,7 @@ export default function Home() {
             selectedName={selected.name}
             units={units}
             swellLabel={`${selected.swell} ${selected.swellDegrees}°`}
-            onSelect={(spot) => { setZone(spot.zone); setSelectedName(spot.name); }}
+            onSelect={focusSpot}
           />
         </section>
 
@@ -258,7 +268,7 @@ export default function Home() {
             <div className="window-score"><b>{selected.score}</b><span>out of 100</span></div>
           </section>
 
-          <section className="primary-card">
+          <section className="primary-card spotlight-card" ref={spotlightRef} key={selected.name}>
             <div className="spot-heading">
               <div>
                 <span className="location-label">{selected.zone} · California</span>
@@ -295,7 +305,7 @@ export default function Home() {
             <div className="section-heading"><h2>{zone} spots</h2><span>{zoneSpots.length} modeled spots</span></div>
             <div className="spot-list">
               {zoneSpots.map((spot) => (
-                <button key={spot.name} className={spot.name === selected.name ? "current" : ""} onClick={() => setSelectedName(spot.name)}>
+                <button key={spot.name} className={spot.name === selected.name ? "current" : ""} onClick={() => focusSpot(spot)}>
                   <span className={`quality-dot ${spot.rating.toLowerCase()}`} />
                   <span className="list-name"><b>{spot.name}</b><small>{spot.swell} · {spot.period}</small></span>
                   <strong>{displayHeight(spot.height)}</strong>
