@@ -22,8 +22,9 @@ type HourlyData = {
   wind_direction_10m?: Array<number | null>;
 };
 
-type ForecastResponse = { hourly: HourlyData };
+type ForecastResponse = { hourly?: HourlyData; error?: boolean; reason?: string };
 type TidePrediction = { t: string; v: string; type?: string };
+type ProviderStatus = { ok: boolean; detail: string };
 
 const profiles: Profile[] = [
   { name: "Trestles", zone: "North County", swellTarget: 190, shoal: 1.12, tideLow: 1.0, tideHigh: 3.6 },
@@ -50,9 +51,39 @@ const zoneLeadSpot: Record<Zone, string> = {
 };
 
 let cached: { expires: number; payload: unknown } | undefined;
+let negativeCache: { expires: number; payload: unknown } | undefined;
+let inFlight: ReturnType<typeof buildPayload> | undefined;
 
 const n = (value: number | null | undefined, fallback = 0) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+const hasNumericValues = (values: Array<number | null> | undefined, minimumLength: number) =>
+  Boolean(values && values.length >= minimumLength && values.some((value) => typeof value === "number" && Number.isFinite(value)));
+
+function hasUsableMarineForecast(hourly: HourlyData) {
+  const length = hourly.time?.length ?? 0;
+  if (length < 24) return false;
+  const hasHeight = hasNumericValues(hourly.swell_wave_height, length) || hasNumericValues(hourly.wave_height, length);
+  const hasDirection = hasNumericValues(hourly.swell_wave_direction, length) || hasNumericValues(hourly.wave_direction, length);
+  const hasPeriod = hasNumericValues(hourly.swell_wave_period, length) || hasNumericValues(hourly.wave_period, length);
+  return hasHeight && hasDirection && hasPeriod;
+}
+
+function alignWeatherToMarine(marineTimes: string[], weather: HourlyData) {
+  const byTime = new Map(weather.time.map((time, index) => [time, index]));
+  const windSpeed = marineTimes.map((time) => {
+    const index = byTime.get(time);
+    return index == null ? null : weather.wind_speed_10m?.[index] ?? null;
+  });
+  const windDirection = marineTimes.map((time) => {
+    const index = byTime.get(time);
+    return index == null ? null : weather.wind_direction_10m?.[index] ?? null;
+  });
+  const minimumCoverage = Math.min(24, marineTimes.length);
+  const usable = windSpeed.slice(0, minimumCoverage).filter((value) => typeof value === "number" && Number.isFinite(value)).length >= minimumCoverage * .8
+    && windDirection.slice(0, minimumCoverage).filter((value) => typeof value === "number" && Number.isFinite(value)).length >= minimumCoverage * .8;
+  return { usable, hourly: { time: marineTimes, wind_speed_10m: windSpeed, wind_direction_10m: windDirection } satisfies HourlyData };
+}
 
 function localNowKey() {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -151,10 +182,30 @@ function closestTide(predictions: TidePrediction[], time: string) {
   return { value, trend: next >= value ? "rising" : "falling" };
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { headers: { "User-Agent": "SanDiegoSurfDashboard/1.0" } });
-  if (!response.ok) throw new Error(`Provider returned ${response.status}`);
-  return response.json() as Promise<T>;
+async function fetchJson<T>(provider: string, url: string): Promise<T> {
+  let response: Response;
+  try {
+    // Cloudflare's runtime owns restricted headers such as User-Agent. Let it set
+    // them instead of turning an otherwise healthy upstream request into a failure.
+    response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "network request failed";
+    console.error(`[conditions] ${provider} fetch failed: ${detail}`);
+    throw new Error(`${provider}: ${detail}`);
+  }
+
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 160).replace(/\s+/g, " ");
+    console.error(`[conditions] ${provider} returned ${response.status}: ${detail}`);
+    throw new Error(`${provider}: HTTP ${response.status}`);
+  }
+
+  try {
+    return await response.json() as T;
+  } catch {
+    console.error(`[conditions] ${provider} returned invalid JSON`);
+    throw new Error(`${provider}: invalid response`);
+  }
 }
 
 async function fetchZone(zone: Zone) {
@@ -165,6 +216,7 @@ async function fetchZone(zone: Zone) {
   marineUrl.searchParams.set("hourly", "wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period");
   marineUrl.searchParams.set("timezone", "America/Los_Angeles");
   marineUrl.searchParams.set("forecast_days", "6");
+  marineUrl.searchParams.set("cell_selection", "sea");
 
   const weatherUrl = new URL("https://api.open-meteo.com/v1/forecast");
   weatherUrl.searchParams.set("latitude", String(point.lat));
@@ -174,11 +226,22 @@ async function fetchZone(zone: Zone) {
   weatherUrl.searchParams.set("timezone", "America/Los_Angeles");
   weatherUrl.searchParams.set("forecast_days", "6");
 
-  const [marine, weather] = await Promise.all([
-    fetchJson<ForecastResponse>(marineUrl.toString()),
-    fetchJson<ForecastResponse>(weatherUrl.toString()),
+  const [marineResult, weatherResult] = await Promise.allSettled([
+    fetchJson<ForecastResponse>(`Open-Meteo marine (${zone})`, marineUrl.toString()),
+    fetchJson<ForecastResponse>(`Open-Meteo wind (${zone})`, weatherUrl.toString()),
   ]);
-  return { marine: marine.hourly, weather: weather.hourly };
+
+  if (marineResult.status === "rejected" || !marineResult.value.hourly || !hasUsableMarineForecast(marineResult.value.hourly)) {
+    throw marineResult.status === "rejected" ? marineResult.reason : new Error(`Open-Meteo marine (${zone}): empty forecast`);
+  }
+
+  const marine = marineResult.value.hourly;
+  const alignedWeather = weatherResult.status === "fulfilled" && weatherResult.value.hourly
+    ? alignWeatherToMarine(marine.time, weatherResult.value.hourly)
+    : null;
+  const windLive = Boolean(alignedWeather?.usable);
+  const weather = windLive ? alignedWeather!.hourly : { time: marine.time };
+  return { marine, weather, windLive };
 }
 
 async function fetchTides(station: string) {
@@ -193,12 +256,14 @@ async function fetchTides(station: string) {
   url.searchParams.set("units", "english");
   url.searchParams.set("interval", "h");
   url.searchParams.set("format", "json");
-  const data = await fetchJson<{ predictions?: TidePrediction[] }>(url.toString());
-  return data.predictions ?? [];
+  const data = await fetchJson<{ predictions?: TidePrediction[] }>(`NOAA tides ${station}`, url.toString());
+  const predictions = (data.predictions ?? []).filter((prediction) => prediction.t && Number.isFinite(Number(prediction.v)));
+  if (!predictions.length) throw new Error(`NOAA tides ${station}: empty predictions`);
+  return predictions;
 }
 
 async function fetchBuoy() {
-  const response = await fetch("https://www.ndbc.noaa.gov/data/realtime2/46225.txt", { headers: { "User-Agent": "SanDiegoSurfDashboard/1.0" } });
+  const response = await fetch("https://www.ndbc.noaa.gov/data/realtime2/46225.txt", { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`NDBC returned ${response.status}`);
   const text = await response.text();
   const row = text.split("\n").find((line) => line.trim() && !line.startsWith("#"));
@@ -210,13 +275,21 @@ async function fetchBuoy() {
   const day = Number(fields[2]);
   const hour = Number(fields[3]);
   const minute = Number(fields[4]);
-  return {
-    observedAt: new Date(Date.UTC(year, month - 1, day, hour, minute)).toISOString(),
+  const observedAt = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (!Number.isFinite(observedAt.getTime()) || Date.now() - observedAt.getTime() > 6 * 60 * 60 * 1000) {
+    throw new Error("NDBC observation is stale");
+  }
+  const observation = {
+    observedAt: observedAt.toISOString(),
     waveHeightM: parse(8),
     dominantPeriod: parse(9),
     meanDirection: parse(11),
     waterC: parse(14),
   };
+  if (observation.waveHeightM == null || observation.dominantPeriod == null || observation.meanDirection == null) {
+    throw new Error("NDBC observation is incomplete");
+  }
+  return observation;
 }
 
 function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, tides: TidePrediction[]) {
@@ -251,7 +324,11 @@ function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, ti
       const wind = n(weather.wind_speed_10m?.[index], 8);
       const windDirection = n(weather.wind_direction_10m?.[index], 270);
       const tide = closestTide(tides, marine.time[index]).value;
-      return scoreConditions(profile, period, wind, windDirection, tide, (face.low + face.high) / 2);
+      const hourHeight = n(marine.swell_wave_height?.[index], n(marine.wave_height?.[index], 1));
+      const hourDirection = n(marine.swell_wave_direction?.[index], n(marine.wave_direction?.[index], 260));
+      const hourPeriod = n(marine.swell_wave_period?.[index], n(marine.wave_period?.[index], 10));
+      const hourFace = spotHeight(profile, hourHeight, hourDirection);
+      return scoreConditions(profile, hourPeriod, wind, windDirection, tide, (hourFace.low + hourFace.high) / 2);
     }));
     const parsed = new Date(`${date}T12:00:00-07:00`);
     return {
@@ -267,12 +344,18 @@ function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, ti
 
 async function buildPayload() {
   const zones = Object.keys(zonePoints) as Zone[];
-  const [zoneResults, laJollaTides, sanDiegoTides, buoyResult] = await Promise.all([
+  const [zoneResults, laJollaTideResult, sanDiegoTideResult, buoyResult] = await Promise.all([
     Promise.allSettled(zones.map((zone) => fetchZone(zone))),
-    fetchTides("9410230").catch(() => []),
-    fetchTides("9410170").catch(() => []),
-    fetchBuoy().catch(() => null),
+    fetchTides("9410230").then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const, value: [] as TidePrediction[] })),
+    fetchTides("9410170").then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const, value: [] as TidePrediction[] })),
+    fetchBuoy().then((value) => ({ ok: true as const, value })).catch((error) => {
+      console.error(`[conditions] NDBC buoy fetch failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      return { ok: false as const, value: null };
+    }),
   ]);
+
+  const laJollaTides = laJollaTideResult.value;
+  const sanDiegoTides = sanDiegoTideResult.value;
 
   const zoneData = new Map<Zone, Awaited<ReturnType<typeof fetchZone>>>();
   zoneResults.forEach((result, index) => {
@@ -284,15 +367,15 @@ async function buildPayload() {
     if (!data) return [];
     const tides = profile.zone === "South Bay" ? sanDiegoTides : laJollaTides;
     const index = currentIndex(data.marine.time);
-    const useBuoy = buoyResult && profile.zone !== "South Bay";
-    const swellHeight = useBuoy && buoyResult.waveHeightM != null
-      ? buoyResult.waveHeightM
+    const useBuoy = buoyResult.value && profile.zone !== "South Bay";
+    const swellHeight = useBuoy && buoyResult.value!.waveHeightM != null
+      ? buoyResult.value!.waveHeightM
       : n(data.marine.swell_wave_height?.[index], n(data.marine.wave_height?.[index], 1));
-    const swellDirection = useBuoy && buoyResult.meanDirection != null
-      ? buoyResult.meanDirection
+    const swellDirection = useBuoy && buoyResult.value!.meanDirection != null
+      ? buoyResult.value!.meanDirection
       : n(data.marine.swell_wave_direction?.[index], n(data.marine.wave_direction?.[index], 260));
-    const period = useBuoy && buoyResult.dominantPeriod != null
-      ? buoyResult.dominantPeriod
+    const period = useBuoy && buoyResult.value!.dominantPeriod != null
+      ? buoyResult.value!.dominantPeriod
       : n(data.marine.swell_wave_period?.[index], n(data.marine.wave_period?.[index], 10));
     const windSpeed = n(data.weather.wind_speed_10m?.[index], 8);
     const windDirection = n(data.weather.wind_direction_10m?.[index], 270);
@@ -300,7 +383,7 @@ async function buildPayload() {
     const face = spotHeight(profile, swellHeight, swellDirection);
     const score = scoreConditions(profile, period, windSpeed, windDirection, tide.value, (face.low + face.high) / 2);
     const window = bestWindow(profile, data.marine, data.weather, tides, index);
-    const waterF = buoyResult?.waterC != null ? Math.round(buoyResult.waterC * 9 / 5 + 32) : null;
+    const waterF = buoyResult.value?.waterC != null ? Math.round(buoyResult.value.waterC * 9 / 5 + 32) : null;
     return [{
       name: profile.name,
       height: face.label,
@@ -324,12 +407,23 @@ async function buildPayload() {
   }));
 
   const liveZones = zoneData.size;
+  const windLiveCount = [...zoneData.values()].filter((data) => data.windLive).length;
+  const allWindLive = windLiveCount === zones.length;
+  const allSupportingProvidersLive = laJollaTideResult.ok && sanDiegoTideResult.ok && buoyResult.ok;
+  const providers: Record<string, ProviderStatus> = {
+    marine: { ok: liveZones === 3, detail: `${liveZones}/3 forecast zones live` },
+    wind: { ok: allWindLive, detail: `${windLiveCount}/${zones.length} forecast zones live${allWindLive ? "" : "; conservative defaults used where unavailable"}` },
+    tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations live` },
+    buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 observation live" : "Using Open-Meteo wave forecast" },
+  };
   return {
-    mode: liveZones === 3 ? "live" : liveZones > 0 ? "partial" : "unavailable",
+    mode: liveZones === 3 && allWindLive && allSupportingProvidersLive ? "live" : liveZones > 0 ? "partial" : "unavailable",
     generatedAt: new Date().toISOString(),
-    buoy: buoyResult,
+    buoy: buoyResult.value,
     conditions,
     zones: series,
+    liveZones: [...zoneData.keys()],
+    providers,
     sources: [
       { name: "Open-Meteo", role: "Marine and wind forecast" },
       { name: "CDIP / NDBC 46225", role: "Observed waves and water temperature" },
@@ -342,12 +436,25 @@ export async function GET() {
   if (cached && cached.expires > Date.now()) {
     return Response.json(cached.payload, { headers: { "Cache-Control": "public, s-maxage=900, stale-while-revalidate=1800", "X-Data-Cache": "HIT" } });
   }
+  if (negativeCache && negativeCache.expires > Date.now()) {
+    return Response.json(negativeCache.payload, { headers: { "Cache-Control": "no-store", "X-Data-Cache": "NEGATIVE-HIT" } });
+  }
 
   try {
-    const payload = await buildPayload();
-    cached = { expires: Date.now() + 15 * 60 * 1000, payload };
-    return Response.json(payload, { headers: { "Cache-Control": "public, s-maxage=900, stale-while-revalidate=1800", "X-Data-Cache": "MISS" } });
-  } catch {
-    return Response.json({ mode: "unavailable", generatedAt: new Date().toISOString(), conditions: [], zones: {}, sources: [] }, { status: 200, headers: { "Cache-Control": "public, max-age=60" } });
+    inFlight ??= buildPayload().finally(() => { inFlight = undefined; });
+    const payload = await inFlight;
+    if (payload.mode !== "unavailable") {
+      cached = { expires: Date.now() + 15 * 60 * 1000, payload };
+      negativeCache = undefined;
+    } else {
+      negativeCache = { expires: Date.now() + 20 * 1000, payload };
+    }
+    const cacheControl = payload.mode === "unavailable"
+      ? "no-store"
+      : "public, s-maxage=900, stale-while-revalidate=1800";
+    return Response.json(payload, { headers: { "Cache-Control": cacheControl, "X-Data-Cache": "MISS" } });
+  } catch (error) {
+    console.error(`[conditions] payload build failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    return Response.json({ mode: "unavailable", generatedAt: new Date().toISOString(), conditions: [], zones: {}, providers: {}, sources: [] }, { status: 200, headers: { "Cache-Control": "no-store" } });
   }
 }

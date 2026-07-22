@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import SurfMap from "./SurfMap";
 
 type Zone = "North County" | "Central" | "South Bay";
-type Rating = "Excellent" | "Good" | "Fair" | "Poor";
+type Rating = "Excellent" | "Good" | "Fair" | "Poor" | "Unavailable";
 
 type Spot = {
   name: string;
@@ -71,7 +71,24 @@ type ConditionsPayload = {
   conditions?: Array<Partial<Spot> & { name: string }>;
   zones?: ZoneSeries;
   buoy?: { observedAt?: string | null } | null;
+  liveZones?: Zone[];
+  providers?: Record<string, { ok: boolean; detail: string }>;
 };
+
+function unavailableSpot(spot: Spot): Spot {
+  return {
+    ...spot,
+    height: "—",
+    rating: "Unavailable",
+    swell: "—",
+    period: "—",
+    wind: "—",
+    tide: "—",
+    water: "—",
+    best: "Data unavailable",
+    score: 0,
+  };
+}
 
 function Icon({ name }: { name: "wave" | "wind" | "tide" | "temp" | "clock" | "arrow" | "spark" }) {
   const paths = {
@@ -104,39 +121,72 @@ export default function Home() {
   const [series, setSeries] = useState<ZoneSeries>({});
   const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "sample">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/conditions", { signal: controller.signal })
-      .then((response) => response.json() as Promise<ConditionsPayload>)
+    const controllers = new Set<AbortController>();
+    let disposed = false;
+
+    const loadConditions = () => {
+      const controller = new AbortController();
+      controllers.add(controller);
+      fetch("/api/conditions?rev=5", { signal: controller.signal, cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Conditions request returned ${response.status}`);
+        return response.json() as Promise<ConditionsPayload>;
+      })
       .then((payload) => {
+        if (disposed || !payload.generatedAt || !Number.isFinite(new Date(payload.generatedAt).getTime())) throw new Error("Invalid conditions response");
         if ((payload.mode === "live" || payload.mode === "partial") && payload.conditions?.length) {
-          setSpots(initialSpots.map((spot) => ({
-            ...spot,
-            ...(payload.conditions?.find((condition) => condition.name === spot.name) ?? {}),
-          })));
+          const liveZones = new Set(payload.liveZones ?? []);
+          setSpots(initialSpots.map((spot) => {
+            const condition = payload.conditions?.find((item) => item.name === spot.name);
+            return condition && liveZones.has(spot.zone) ? { ...spot, ...condition } : unavailableSpot(spot);
+          }));
           setSeries(payload.zones ?? {});
           setDataMode(payload.mode);
+          const providers = Object.entries(payload.providers ?? {});
+          const liveCount = providers.filter(([, status]) => status.ok).length;
+          setProviderSummary(providers.length ? `${liveCount}/${providers.length} live data services. ${providers.map(([name, status]) => `${name}: ${status.detail}`).join(" · ")}` : "Live forecast data.");
         } else {
           setDataMode("sample");
+          setProviderSummary("The live marine forecast could not be reached. Retrying on the next page load; these values are clearly marked sample data.");
         }
         setUpdatedAt(new Date(payload.generatedAt));
       })
       .catch((error: unknown) => {
-        if ((error as { name?: string })?.name !== "AbortError") setDataMode("sample");
+        if ((error as { name?: string })?.name !== "AbortError" && !disposed) {
+          setDataMode("sample");
+          setProviderSummary("The live forecast request failed. Retrying automatically; these values are clearly marked sample data.");
+          setUpdatedAt(new Date());
+        }
+      })
+      .finally(() => {
+        controllers.delete(controller);
       });
-    return () => controller.abort();
+    };
+
+    loadConditions();
+    const interval = window.setInterval(loadConditions, 15 * 60 * 1000);
+    const handleVisibility = () => { if (document.visibilityState === "visible") loadConditions(); };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      controllers.forEach((controller) => controller.abort());
+    };
   }, []);
 
   const zoneSpots = useMemo(() => spots.filter((spot) => spot.zone === zone), [spots, zone]);
   const selected = spots.find((spot) => spot.name === selectedName) ?? spots[3];
-  const hourly = series[zone]?.hourly?.length ? series[zone].hourly : initialHourly;
-  const days = series[zone]?.days?.length ? series[zone].days : initialDays;
-  const strongestDay = days.reduce((best, day) => {
+  const hourly = series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
+  const days = series[zone]?.days?.length ? series[zone].days : dataMode === "sample" ? initialDays : [];
+  const strongestDay = days.length ? days.reduce((best, day) => {
     const bestHigh = Number(best.height.match(/\d+/g)?.at(-1) ?? 0);
     const dayHigh = Number(day.height.match(/\d+/g)?.at(-1) ?? 0);
     return dayHigh > bestHigh ? day : best;
-  }, days[0]);
+  }, days[0]) : null;
   const updatedLabel = updatedAt
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).format(updatedAt)
     : "Connecting…";
@@ -168,7 +218,7 @@ export default function Home() {
         </nav>
 
         <div className="header-tools">
-          <span className={`updated ${dataMode}`} title={dataMode === "sample" ? "Live providers are temporarily unavailable; showing sample fallback values." : "Forecast data refreshes every 15 minutes."}>
+          <span className={`updated ${dataMode}`} title={providerSummary}>
             <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "sample" ? `Sample fallback · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
           </span>
           <button className="unit-toggle" onClick={() => setUnits(units === "FT" ? "M" : "FT")} aria-label="Toggle wave height units">
@@ -209,7 +259,7 @@ export default function Home() {
 
             <div className="wave-reading">
               <strong>{displayHeight(selected.height)}</strong>
-              <span><b>Clean faces</b><small>waist to head high+</small></span>
+              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : "Modeled faces"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : "break-level estimate"}</small></span>
             </div>
 
             <div className="metrics-grid">
@@ -220,17 +270,19 @@ export default function Home() {
             </div>
 
             <div className="mini-forecast" aria-label="Hourly quality forecast">
-              <div className="forecast-labels"><span>{hourly[0]?.time ?? "Now"}</span><span>Now</span><span>{hourly.at(-1)?.time ?? "Later"}</span></div>
-              <div className="forecast-track">
-                {hourly.map((hour, index) => <i key={`${hour.time}-${index}`} style={{ height: `${Math.max(22, hour.score)}%` }} title={`${hour.time}: ${hour.score}/100`} />)}
-              </div>
+              {hourly.length ? <>
+                <div className="forecast-labels"><span>{hourly[0]?.time ?? "Now"}</span><span>Now</span><span>{hourly.at(-1)?.time ?? "Later"}</span></div>
+                <div className="forecast-track">
+                  {hourly.map((hour, index) => <i key={`${hour.time}-${index}`} style={{ height: `${Math.max(22, hour.score)}%` }} title={`${hour.time}: ${hour.score}/100`} />)}
+                </div>
+              </> : <p className="forecast-unavailable">Regional forecast temporarily unavailable.</p>}
             </div>
 
             <button className="details-button">View {selected.name} details <span>→</span></button>
           </section>
 
           <section className="nearby-card">
-            <div className="section-heading"><h2>{zone} spots</h2><span>{zoneSpots.length} reporting</span></div>
+            <div className="section-heading"><h2>{zone} spots</h2><span>{zoneSpots.length} modeled spots</span></div>
             <div className="spot-list">
               {zoneSpots.map((spot) => (
                 <button key={spot.name} className={spot.name === selected.name ? "current" : ""} onClick={() => setSelectedName(spot.name)}>
@@ -248,9 +300,9 @@ export default function Home() {
 
       <section className="outlook-section">
         <div className="outlook-copy">
-          <span className="eyebrow">5-day outlook</span>
-          <h2>{strongestDay.day === "Today" ? "Today carries the strongest modeled pulse." : `${strongestDay.day} carries the strongest modeled pulse.`}</h2>
-          <p>These break-level estimates combine modeled swell and wind with observed buoy conditions, local tide predictions, and each spot’s exposure profile.</p>
+          <span className="eyebrow">{zone} regional outlook</span>
+          <h2>{strongestDay ? strongestDay.day === "Today" ? "Today carries the strongest modeled pulse." : `${strongestDay.day} carries the strongest modeled pulse.` : "Regional outlook temporarily unavailable."}</h2>
+          <p>These regional estimates combine modeled swell and wind with observed buoy conditions, local tide predictions, and representative break exposure.</p>
         </div>
         <div className="day-grid">
           {days.map((day, index) => (
@@ -269,7 +321,7 @@ export default function Home() {
         <div><Logo /><b>San Diego Surf</b></div>
         <p>One clear read on the county’s coastline.</p>
         <span className="source-line">
-          {dataMode === "sample" ? "Sample fallback" : "Live estimates"} · Open-Meteo · CDIP/NDBC 46225 · NOAA CO-OPS
+          {dataMode === "sample" ? "Sample fallback" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · Open-Meteo · CDIP/NDBC 46225 · NOAA CO-OPS
         </span>
       </footer>
     </main>

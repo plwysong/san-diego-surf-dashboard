@@ -10,7 +10,7 @@ type MapSpot = {
   name: string;
   zone: Zone;
   height: string;
-  rating: "Excellent" | "Good" | "Fair" | "Poor";
+  rating: "Excellent" | "Good" | "Fair" | "Poor" | "Unavailable";
   lat: number;
   lon: number;
 };
@@ -31,6 +31,7 @@ const colors = {
   Good: "#168054",
   Fair: "#c8821b",
   Poor: "#b4514e",
+  Unavailable: "#9aa6af",
 };
 
 export default function SurfMap({
