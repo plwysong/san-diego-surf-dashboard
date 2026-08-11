@@ -123,7 +123,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(10,99,238,.42); 
 .forecast-strip-heading b { font-size: 10px; }
 .forecast-strip-heading span { color: #83919d; font-size: 8px; font-weight: 680; letter-spacing: .06em; text-transform: uppercase; }
 .day-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
-.day-card { min-width: 0; height: 62px; padding: 7px 8px; position: relative; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: rgba(255,255,255,.88); text-align: left; cursor: pointer; box-shadow: none; transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.day-card { min-width: 0; height: 72px; padding: 7px 8px; position: relative; display: flex; flex-direction: column; justify-content: space-between; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: rgba(255,255,255,.88); text-align: left; cursor: pointer; box-shadow: none; transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease; }
 .day-card:hover { transform: translateY(-1px); border-color: rgba(10,99,238,.42); box-shadow: 0 5px 13px rgba(16,56,91,.08); }
 .day-card.selected { color: white; border-color: #0a63ee; background: linear-gradient(145deg, #082b50, #0a63ee); box-shadow: 0 5px 14px rgba(10,99,238,.2); }
 .day-card > span { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 3px; }
@@ -131,6 +131,8 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(10,99,238,.42); 
 .day-card > span small { color: #8a98a3; font-size: 8px; white-space: nowrap; }
 .day-card.selected > span small { color: #bcd4ed; }
 .day-card > strong { font-size: 12px; letter-spacing: -.04em; white-space: nowrap; }
+.day-card > .day-sets { margin-top: -2px; color: #75858f; font-size: 7px; font-weight: 650; white-space: nowrap; }
+.day-card.selected > .day-sets { color: #bcd4ed; }
 .day-card > i { width: 5px; height: 5px; position: absolute; right: 7px; bottom: 8px; border-radius: 50%; background: var(--good); }
 .day-card > i.excellent { background: #65d9ff; }.day-card > i.fair { background: #e7a536; }.day-card > i.poor { background: #d76d68; }.day-card > i.unavailable { background: #9aa6af; }
 
@@ -176,7 +178,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(10,99,238,.42); 
 .quality-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fair); }.quality-dot.good { background: var(--good); }.quality-dot.excellent { background: var(--blue); }.quality-dot.poor { background: var(--poor); }
 .quality-dot.unavailable { background: #9aa6af; }
 .list-name { min-width: 0; display: flex; flex-direction: column; }.list-name b { font-size: 10px; }.list-name small { margin-top: 2px; color: #7b8994; font-size: 8px; }
-.spot-list button > strong { font-size: 11px; white-space: nowrap; }.compact-rating { justify-self: end; padding: 4px 6px; font-size: 7px; }.chevron { color: #93a0aa; font-size: 19px; }
+.spot-list button > strong { display: flex; flex-direction: column; font-size: 11px; white-space: nowrap; }.spot-list button > strong small { margin-top: 2px; color: #84919b; font-size: 7px; font-weight: 600; }.compact-rating { justify-self: end; padding: 4px 6px; font-size: 7px; }.chevron { color: #93a0aa; font-size: 19px; }
 
 footer { padding: 25px max(5vw, 28px); display: flex; justify-content: space-between; align-items: center; color: #778692; border-top: 1px solid var(--line); font-size: 10px; }
 footer > div { display: flex; align-items: center; gap: 8px; color: var(--ink); }footer .logo-mark { width: 25px; height: 22px; transform: scale(.65); transform-origin: left center; margin-right: -7px; }

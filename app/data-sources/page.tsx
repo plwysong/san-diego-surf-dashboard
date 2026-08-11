@@ -46,7 +46,7 @@ const providerInfo = {
   },
   wind: {
     name: "Open-Meteo + NWS Wind",
-    role: "10-meter wind is aligned hour-by-hour from Open-Meteo, with the National Weather Service used automatically if that feed is rate-limited.",
+    role: "10-meter wind is requested at all 17 breaks and aligned hour-by-hour. An isolated zone or National Weather Service forecast is used when spot-scale guidance is unavailable.",
     href: "https://www.weather.gov/documentation/services-web-api",
     link: "NWS API documentation",
   },
@@ -92,7 +92,7 @@ export default function DataSourcesPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/conditions?rev=13&view=sources", { cache: "no-store", signal: controller.signal })
+    fetch("/api/conditions?rev=14&view=sources", { cache: "no-store", signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<Payload>;
@@ -151,8 +151,8 @@ export default function DataSourcesPage() {
       </section>
 
       <section className="method-note">
-        <div><span className="eyebrow">How Forecast v3 works</span><h2>Nearshore spectral guidance, checked against what the ocean is doing now.</h2></div>
-        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and an empirical break-response multiplier. Long-, mid-, and short-period energy is transformed separately using direction and period, then recombined into typical modeled faces and a larger-set range. Tide values are interpolated only when nearby NOAA hours bracket the forecast time; missing or incomplete wave, tide, and wind data is labeled unavailable and excluded from scoring instead of invented. Regional buoy agreement affects confidence, and the La Jolla wind observation adjusts only coherent Central County forecast hours. Future-day confidence is capped as the horizon grows, and stored forecasts lose confidence as they age. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
+        <div><span className="eyebrow">How Forecast v4 works</span><h2>Nearshore spectral guidance for now—and a clearer five-day planning outlook.</h2></div>
+        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and period-aware break response. Long-, mid-, and short-period energy is transformed separately, then recombined into typical modeled faces and a distinct larger-set range. The five-day strip uses the largest coherent daytime response so an incoming build is not hidden by a cleaner morning window. Breaks explicitly calibrated for a regional upside check may also use the independent regional planning guide; the selected range always comes from one source and hour, and components from the two models are never mixed. Selecting a day shows the separate best-window estimate. Wind is requested at every break, with isolated fallbacks that never invent missing values. “Data confidence” measures freshness, coverage, horizon, and source agreement. Forecast skill remains explicitly unmeasured until enough timestamped breaking-wave observations have been collected. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
       </section>
     </main>
   );

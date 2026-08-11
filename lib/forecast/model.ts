@@ -6,6 +6,8 @@ export type Profile = {
   zone: Zone;
   swellTarget: number;
   shoal: number;
+  response?: Partial<Record<WaveComponent["band"], number>>;
+  regionalPlanningGuide?: boolean;
   tideLow: number;
   tideHigh: number;
   mopId: string;
@@ -62,21 +64,21 @@ export type Confidence = { label: "High" | "Medium" | "Low"; score: number; reas
 export const profiles: Profile[] = [
   { name: "Trestles", zone: "North County", swellTarget: 190, shoal: 1.12, tideLow: 1.0, tideHigh: 3.6, mopId: "D1207", shoreNormal: 209.49 },
   { name: "Oceanside", zone: "North County", swellTarget: 225, shoal: 1.02, tideLow: 1.3, tideHigh: 4.0, mopId: "D0903", shoreNormal: 231.02 },
-  { name: "Tamarack", zone: "North County", swellTarget: 245, shoal: 1.02, tideLow: 1.1, tideHigh: 4.0, mopId: "D0845", shoreNormal: 238.01 },
+  { name: "Tamarack", zone: "North County", swellTarget: 245, shoal: 1.02, response: { mid: 1.12, bulk: 1.12 }, tideLow: 1.1, tideHigh: 4.0, mopId: "D0845", shoreNormal: 238.01 },
   { name: "Ponto", zone: "North County", swellTarget: 245, shoal: 1.08, tideLow: 1.3, tideHigh: 4.2, mopId: "D0775", shoreNormal: 248.53 },
   { name: "Grandview", zone: "North County", swellTarget: 230, shoal: .95, tideLow: 1.5, tideHigh: 4.5, mopId: "D0757", shoreNormal: 256.52 },
   { name: "Swami’s", zone: "North County", swellTarget: 225, shoal: 1.08, tideLow: 1.8, tideHigh: 4.4, mopId: "D0708", shoreNormal: 219.51 },
-  { name: "Cardiff Reef", zone: "North County", swellTarget: 225, shoal: 1.1, tideLow: 2.0, tideHigh: 4.8, mopId: "D0680", shoreNormal: 252.55 },
-  { name: "Del Mar", zone: "North County", swellTarget: 255, shoal: .95, tideLow: 1.0, tideHigh: 4.0, mopId: "D0620", shoreNormal: 264.49 },
-  { name: "Blacks", zone: "Central", swellTarget: 275, shoal: 1.32, tideLow: 1.5, tideHigh: 4.0, mopId: "D0537", shoreNormal: 270 },
+  { name: "Cardiff Reef", zone: "North County", swellTarget: 225, shoal: 1.1, response: { mid: 1.08 }, tideLow: 2.0, tideHigh: 4.8, mopId: "D0680", shoreNormal: 252.55 },
+  { name: "Del Mar", zone: "North County", swellTarget: 255, shoal: .95, response: { mid: 1.12, bulk: 1.12 }, tideLow: 1.0, tideHigh: 4.0, mopId: "D0620", shoreNormal: 264.49 },
+  { name: "Blacks", zone: "Central", swellTarget: 275, shoal: 1.32, response: { long: 1.18 }, regionalPlanningGuide: true, tideLow: 1.5, tideHigh: 4.0, mopId: "D0537", shoreNormal: 270 },
   { name: "La Jolla Shores", zone: "Central", swellTarget: 270, shoal: .65, tideLow: 1.4, tideHigh: 4.4, mopId: "D0500", shoreNormal: 299.45 },
-  { name: "Windansea", zone: "Central", swellTarget: 260, shoal: 1.02, tideLow: 1.8, tideHigh: 4.5, mopId: "D0457", shoreNormal: 267.47 },
+  { name: "Windansea", zone: "Central", swellTarget: 260, shoal: 1.02, response: { long: 1.12 }, tideLow: 1.8, tideHigh: 4.5, mopId: "D0457", shoreNormal: 267.47 },
   { name: "Tourmaline", zone: "Central", swellTarget: 275, shoal: .72, tideLow: 2.0, tideHigh: 4.8, mopId: "D0416", shoreNormal: 226.29 },
   { name: "Crystal Pier", zone: "Central", swellTarget: 270, shoal: .82, tideLow: 1.2, tideHigh: 4.0, mopId: "D0406", shoreNormal: 250.84 },
-  { name: "Ocean Beach", zone: "Central", swellTarget: 250, shoal: .98, tideLow: 1.2, tideHigh: 4.0, mopId: "D0348", shoreNormal: 296.97 },
+  { name: "Ocean Beach", zone: "Central", swellTarget: 250, shoal: .98, response: { long: 1.1 }, tideLow: 1.2, tideHigh: 4.0, mopId: "D0348", shoreNormal: 296.97 },
   { name: "Sunset Cliffs", zone: "Central", swellTarget: 255, shoal: 1.08, tideLow: 2.0, tideHigh: 4.8, mopId: "D0318", shoreNormal: 267 },
-  { name: "Coronado", zone: "South Bay", swellTarget: 225, shoal: .62, tideLow: 1.0, tideHigh: 3.8, mopId: "D0178", shoreNormal: 221.17 },
-  { name: "Imperial Beach", zone: "South Bay", swellTarget: 220, shoal: .88, tideLow: 1.2, tideHigh: 4.0, mopId: "D0053", shoreNormal: 267.47 },
+  { name: "Coronado", zone: "South Bay", swellTarget: 225, shoal: .62, response: { long: 1.4 }, regionalPlanningGuide: true, tideLow: 1.0, tideHigh: 3.8, mopId: "D0178", shoreNormal: 221.17 },
+  { name: "Imperial Beach", zone: "South Bay", swellTarget: 220, shoal: .88, response: { long: 1.3 }, regionalPlanningGuide: true, tideLow: 1.2, tideHigh: 4.0, mopId: "D0053", shoreNormal: 267.47 },
 ];
 
 export const spotCoordinates: Record<string, [number, number]> = {
@@ -120,7 +122,8 @@ export function componentFaceFeet(profile: Profile, component: WaveComponent, ne
   const directionalFit = Math.max(0, Math.cos(angularDifference(component.direction, profile.swellTarget) * Math.PI / 180));
   const exposure = nearshore ? .82 + .18 * directionalFit : .42 + .58 * directionalFit;
   const periodResponse = Math.max(.85, Math.min(1.28, 1 + (component.period - 12) * .025));
-  return Math.max(0, component.height * 3.28084 * profile.shoal * exposure * periodResponse);
+  const calibratedResponse = profile.response?.[component.band] ?? 1;
+  return Math.max(0, component.height * 3.28084 * profile.shoal * exposure * periodResponse * calibratedResponse);
 }
 
 export function spotHeight(profile: Profile, wave: WaveEstimate) {

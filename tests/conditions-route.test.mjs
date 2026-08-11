@@ -190,6 +190,7 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     assert.equal(Object.keys(partial.dailyConditions).length, 5);
     assert.ok(Object.values(partial.dailyConditions).every((day) => day.length === 17));
     assert.ok(Object.values(partial.dailyConditions)[1][0].hourly.length > 0);
+    assert.ok(Object.values(partial.dailyConditions).every((day) => day.every((spot) => spot.dayHeight && spot.daySets && spot.dayPeak && spot.daySource)));
     assert.equal(partial.providers.mop.ok, true);
     assert.equal(partial.providers.cdip.ok, true);
     assert.equal(partial.providers.spectra.ok, false);
@@ -204,7 +205,7 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     assert.equal(futureDays[1][0].secondarySwell, "WNW · 8s");
     assert.equal(futureDays.at(-1)[0].confidence, "Low");
     assert.equal(partial.providers.wind.ok, false);
-    assert.match(partial.providers.wind.detail, /^2\/3 forecast zones live/);
+    assert.match(partial.providers.wind.detail, /^10\/17 break forecasts have wind/);
 
     let outageCalls = 0;
     globalThis.fetch = async () => {
@@ -378,6 +379,10 @@ test("spectral forecasts preserve long-period swell, publish sets, and use NWS w
     const setHigh = Number(futureOb.sets.match(/\d+/g).at(-1));
     assert.ok(setHigh > typicalHigh);
     assert.equal(futureOb.secondarySwellSource, "CDIP spectrum");
+    assert.match(futureOb.dayHeight, /^\d+–\d+ ft$/);
+    assert.match(futureOb.daySets, /^\d+–\d+ ft$/);
+    assert.match(futureOb.dayPeak, /AM|PM/);
+    assert.match(futureOb.daySource, /Nearshore model|Regional planning guide/);
   } finally {
     globalThis.fetch = originalFetch;
   }

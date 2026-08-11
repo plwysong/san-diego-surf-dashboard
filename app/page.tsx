@@ -30,6 +30,7 @@ type Spot = {
   confidence?: "High" | "Medium" | "Low";
   confidenceScore?: number;
   confidenceReason?: string;
+  forecastSkill?: string;
   modelPoint?: string;
   windSource?: "Open-Meteo" | "NWS" | "Unavailable";
   summary?: string;
@@ -65,10 +66,10 @@ const zoneDefaults: Record<Zone, string> = {
 };
 
 type HourlyPoint = { time: string; height: number; wind: number | null; score: number };
-type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[] };
+type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[]; dayHeight?: string; daySets?: string; dayPeak?: string; daySource?: string };
 type ZoneSeries = Record<string, {
   hourly?: HourlyPoint[];
-  days?: Array<{ dateKey: string; day: string; date: string; height: string; sets?: string; rating: Rating; period: string }>;
+  days?: Array<{ dateKey: string; day: string; date: string; height: string; sets?: string; dayPeak?: string; daySource?: string; rating: Rating; period: string }>;
 }>;
 
 type ConditionsPayload = {
@@ -101,6 +102,7 @@ function unavailableSpot(spot: SpotDefinition): Spot {
     confidence: "Low",
     confidenceScore: 0,
     confidenceReason: "Live forecast unavailable",
+    forecastSkill: "Not yet measured",
     modelPoint: "Unavailable",
     summary: "Waiting for live source data",
     hourly: [],
@@ -202,7 +204,7 @@ export default function Home() {
     const loadConditions = () => {
       const controller = new AbortController();
       controllers.add(controller);
-      fetch("/api/conditions?rev=13", { signal: controller.signal, cache: "no-store" })
+      fetch("/api/conditions?rev=14", { signal: controller.signal, cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`Conditions request returned ${response.status}`);
         return response.json() as Promise<ConditionsPayload>;
@@ -271,7 +273,10 @@ export default function Home() {
     const forecast = dailyConditions[day.dateKey]?.find((item) => item.name === selectedName);
     return forecast ? {
       ...day,
-      height: forecast.height ?? day.height,
+      height: forecast.dayHeight ?? forecast.height ?? day.height,
+      sets: forecast.daySets ?? forecast.sets ?? day.sets,
+      dayPeak: forecast.dayPeak ?? day.dayPeak,
+      daySource: forecast.daySource ?? day.daySource,
       rating: forecast.rating ?? day.rating,
       period: forecast.period ?? day.period,
     } : { ...day, height: "—", sets: undefined, rating: "Unavailable" as const, period: "—" };
@@ -355,7 +360,7 @@ export default function Home() {
           <section className="forecast-strip" aria-label={`${selectedName} five-day forecast`}>
             <div className="forecast-strip-heading">
               <b>{selectedName} · 5-day forecast</b>
-              <span>Best-window estimate · select a day</span>
+              <span>Daytime peak + larger sets · select a day</span>
             </div>
             <div className="day-grid">
               {days.map((day) => (
@@ -364,11 +369,12 @@ export default function Home() {
                   className={`day-card ${day.dateKey === activeDateKey ? "selected" : ""}`}
                   onClick={() => setSelectedDateKey(day.dateKey)}
                   aria-pressed={day.dateKey === activeDateKey}
-                  aria-label={`${day.day}, ${day.date}: ${day.height}, ${day.period} period, ${day.rating}`}
-                  title={`${day.period} period · ${day.rating}`}
+                  aria-label={`${day.day}, ${day.date}: daytime peak ${day.height}${day.sets ? `, larger sets ${day.sets}` : ""}, ${day.period} period, ${day.rating}`}
+                  title={`${day.dayPeak ? `Peak around ${day.dayPeak} · ` : ""}${day.daySource ? `${day.daySource} · ` : ""}${day.period} period · ${day.rating}`}
                 >
                   <span><b>{day.day}</b><small>{day.date}</small></span>
                   <strong>{displayHeight(day.height)}</strong>
+                  {day.sets && <small className="day-sets">sets {displayHeight(day.sets)}</small>}
                   <i className={day.rating.toLowerCase()} aria-hidden="true" />
                 </button>
               ))}
@@ -390,14 +396,14 @@ export default function Home() {
                 <h1>{selected.name}</h1>
               </div>
               <div className="spot-badges">
-                {selected.confidence && <span className={`confidence ${selected.confidence.toLowerCase()}`}>Model confidence: {selected.confidence} · {selected.confidenceScore}/100</span>}
+                {selected.confidence && <span className={`confidence ${selected.confidence.toLowerCase()}`}>Data confidence: {selected.confidence} · {selected.confidenceScore}/100</span>}
                 <span className={`rating ${selected.rating.toLowerCase()}`}>{selected.rating}</span>
               </div>
             </div>
 
             <div className="wave-reading">
               <strong>{displayHeight(selected.height)}</strong>
-              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : "Typical modeled faces"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.sets ? `Larger sets ${displayHeight(selected.sets)}` : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
+              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : isFuture ? "At the best window" : "Now · typical modeled faces"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.sets ? `Larger sets ${displayHeight(selected.sets)}` : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
             </div>
 
             <div className="metrics-grid">
@@ -407,7 +413,7 @@ export default function Home() {
               <div><Icon name="temp" /><span><small>{isFuture ? "Latest water" : "Water"}</small><b>{selected.water}</b></span></div>
             </div>
 
-            {selected.summary && <p className="forecast-summary">{selected.summary}<span>Confidence inputs: {selected.confidenceReason}. Coverage/agreement score—not measured accuracy or probability.</span></p>}
+            {selected.summary && <p className="forecast-summary">{selected.summary}<span>Data confidence: {selected.confidenceReason}. Forecast skill: {selected.forecastSkill ?? "not yet measured"}. The score measures coverage and agreement—not accuracy or probability.</span></p>}
 
             <QualityTrend hours={hourly} future={isFuture} />
           </section>
@@ -416,10 +422,10 @@ export default function Home() {
             <div className="section-heading"><h2>{zone} spots</h2><span>{zoneSpots.length} modeled spots</span></div>
             <div className="spot-list">
               {zoneSpots.map((spot) => (
-                <button key={spot.name} className={spot.name === selected.name ? "current" : ""} aria-current={spot.name === selected.name ? "true" : undefined} onClick={() => focusSpot(spot)} title={`${spot.confidence ?? "Low"} confidence${spot.confidenceReason ? ` · ${spot.confidenceReason}` : ""}`}>
+                <button key={spot.name} className={spot.name === selected.name ? "current" : ""} aria-current={spot.name === selected.name ? "true" : undefined} onClick={() => focusSpot(spot)} title={`${spot.confidence ?? "Low"} data confidence${spot.confidenceReason ? ` · ${spot.confidenceReason}` : ""}`}>
                   <span className={`quality-dot ${spot.rating.toLowerCase()}`} />
                   <span className="list-name"><b>{spot.name}</b><small>{spot.swell} · {spot.period}</small></span>
-                  <strong>{displayHeight(spot.height)}</strong>
+                  <strong>{displayHeight(spot.height)}{spot.sets && <small>sets {displayHeight(spot.sets)}</small>}</strong>
                   <span className={`compact-rating ${spot.rating.toLowerCase()}`}>{spot.rating}</span>
                   <span className="chevron">›</span>
                 </button>

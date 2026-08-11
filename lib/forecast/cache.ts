@@ -5,7 +5,7 @@ type D1StatementLike = { bind(...values: unknown[]): D1StatementLike; run(): Pro
 type D1DatabaseLike = { prepare(query: string): D1StatementLike };
 type ForecastPayload = Record<string, unknown> & { mode: "live" | "partial" | "unavailable" };
 
-const CACHE_KEY = "san-diego-conditions-v5";
+const CACHE_KEY = "san-diego-conditions-v11";
 const FRESH_TTL_MS = 60 * 60 * 1000;
 const STALE_TTL_MS = 36 * 60 * 60 * 1000;
 const REFRESH_LEASE_MS = 45 * 1000;

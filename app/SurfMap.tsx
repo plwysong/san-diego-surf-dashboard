@@ -10,6 +10,7 @@ type MapSpot = {
   name: string;
   zone: Zone;
   height: string;
+  sets?: string;
   rating: "Excellent" | "Good" | "Fair" | "Poor" | "Unavailable";
   lat: number;
   lon: number;
@@ -114,7 +115,7 @@ export default function SurfMap({
       });
       marker.on("click", () => onSelect(spot));
       if (activeZone || selected) {
-        marker.bindTooltip(`<b>${spot.name}</b><span>${formatHeight(spot.height)}</span>`, {
+        marker.bindTooltip(`<b>${spot.name}</b><span>${formatHeight(spot.height)}${spot.sets ? ` · sets ${formatHeight(spot.sets)}` : ""}</span>`, {
           permanent: true,
           interactive: true,
           direction: tooltipDirection,
