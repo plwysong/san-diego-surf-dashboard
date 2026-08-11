@@ -31,8 +31,11 @@ npm test
 
 ## Project map
 
-- `app/` — dashboard, data-sources page, and server routes
-- `lib/` — forecast providers, break profiles, scoring, caching, and fallbacks
+- `app/` — dashboard, interactive map, data-sources page, and forecast assembly route
+- `lib/forecast/model.ts` — break profiles, swell response, scoring, summaries, and confidence
+- `lib/forecast/providers.ts` — bounded provider requests, validation helpers, and isolated concurrency
+- `lib/forecast/cache.ts` — memory and D1 caching, stale retention, refresh leases, and outage coalescing
+- `lib/forecast/dates.ts` — San Diego-local date boundaries for current and future forecast views
 - `db/` — durable forecast-cache schema and access
 - `tests/` — provider-failure and forecast-engine regression tests
 - `.openai/hosting.json` — current ChatGPT Sites deployment configuration
@@ -40,9 +43,9 @@ npm test
 
 ## Data sources
 
-The dashboard uses CDIP nearshore and buoy data, Open-Meteo marine/weather forecasts, NOAA CO-OPS tides, and National Weather Service wind fallback. The in-app `/data-sources` page shows provider health, freshness, and modeling limitations.
+The dashboard uses CDIP nearshore and buoy data, Open-Meteo marine/weather forecasts, NOAA CO-OPS tides, and National Weather Service wind fallback. The in-app `/data-sources` page shows provider health, freshness, forecast coverage, and modeling limitations.
 
-Forecast values are modeled estimates, not direct observations of breaking wave faces. Keep source provenance and confidence labels accurate when changing the forecast engine.
+Forecast values are modeled estimates, not direct observations of breaking wave faces. Missing wave, tide, wind, or water values are shown as unavailable rather than filled with synthetic defaults. A stored forecast is labeled cached, retains the provider status from its generation time, and has its confidence reduced as it ages.
 
 ## Deployment
 

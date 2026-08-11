@@ -34,7 +34,7 @@ const providerInfo = {
   },
   spectra: {
     name: "CDIP Spectral Components",
-    role: "Break-adjacent forecast energy is separated into long-, mid-, and short-period components so a long-period swell is not hidden by a larger short-period peak.",
+    role: "Break-adjacent forecast energy is separated into long-, mid-, and short-period components so a long-period swell is not hidden by a larger short-period peak. The Torrey Pines observed spectrum is source monitoring only.",
     href: "https://cdip.ucsd.edu/m/documents/data_access.html",
     link: "CDIP spectral access",
   },
@@ -58,7 +58,7 @@ const providerInfo = {
   },
   tides: {
     name: "NOAA CO-OPS",
-    role: "Hourly tide predictions from La Jolla station 9410230 and San Diego station 9410170.",
+    role: "Hourly tide predictions from La Jolla and San Diego, validated across all five displayed days and interpolated only between nearby source hours.",
     href: "https://tidesandcurrents.noaa.gov/",
     link: "NOAA Tides & Currents",
   },
@@ -92,7 +92,7 @@ export default function DataSourcesPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/conditions?rev=12&view=sources", { cache: "no-store", signal: controller.signal })
+    fetch("/api/conditions?rev=13&view=sources", { cache: "no-store", signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
         return response.json() as Promise<Payload>;
@@ -104,7 +104,8 @@ export default function DataSourcesPage() {
     return () => controller.abort();
   }, []);
 
-  const overall = error ? "Unavailable" : !payload ? "Checking" : payload.cache?.state === "stale-cache" ? "Last successful forecast" : payload.mode === "live" ? "All systems live" : payload.mode === "partial" ? "Partial live data" : "Live feed unavailable";
+  const isCached = payload?.cache?.state === "fresh-cache" || payload?.cache?.state === "stale-cache";
+  const overall = error ? "Unavailable" : !payload ? "Checking" : isCached ? "Stored forecast" : payload.mode === "live" ? "Core forecast live" : payload.mode === "partial" ? "Partial live data" : "Live feed unavailable";
 
   return (
     <main className="sources-page">
@@ -117,15 +118,15 @@ export default function DataSourcesPage() {
         <span className="eyebrow">Data provenance</span>
         <h1>Source status & timestamps</h1>
         <p>Every surf estimate is derived from these public feeds. “Checked” is when the dashboard requested the provider, “observation time” comes from a measured feed, and “forecast valid through” is the end of the model or prediction coverage used.</p>
-        <div className={`sources-overall ${payload?.mode ?? (error ? "unavailable" : "loading")}`}>
+        <div className={`sources-overall ${isCached ? "cached" : payload?.mode ?? (error ? "unavailable" : "loading")}`}>
           <i />
           <div><small>Current pipeline status</small><b>{overall}</b></div>
-          <time>{payload ? `${payload.cache?.state === "stale-cache" ? "Forecast stored" : "Dashboard generated"} ${formatTimestamp(payload.generatedAt)}` : error ? "Automatic retry occurs on the next request" : "Contacting providers…"}</time>
+          <time>{payload ? `Forecast generated ${formatTimestamp(payload.generatedAt)}` : error ? "Automatic retry occurs on the next request" : "Contacting providers…"}</time>
         </div>
-        {payload?.cache?.state === "stale-cache" && <p className="sources-cache-note">A provider refresh is delayed, so the dashboard is serving the most recent successful real forecast instead of sample data. {payload.cache.refreshError ?? "Refresh will retry automatically."}</p>}
+        {isCached && <p className="sources-cache-note">This is a stored real forecast, not a current provider check. {payload?.cache?.state === "stale-cache" ? payload.cache.refreshError ?? "A refresh is delayed and will retry automatically." : "Provider status below reflects the forecast generation time."}</p>}
       </section>
 
-      <section className="provider-grid" aria-label="Live data provider status">
+      <section className="provider-grid" aria-label="Forecast data provider status">
         {Object.entries(providerInfo).map(([key, info]) => {
           const status = payload?.providers?.[key];
           const state = !status ? "loading" : status.ok ? "ok" : "down";
@@ -133,12 +134,12 @@ export default function DataSourcesPage() {
             <article className={`provider-card ${state}`} key={key}>
               <div className="provider-card-heading">
                 <div><span className={`provider-dot ${status?.ok ? "ok" : status ? "down" : "loading"}`} /><h2>{info.name}</h2></div>
-                <b>{status ? status.ok ? "Live" : "Degraded" : "Checking"}</b>
+                <b>{status ? isCached ? status.ok ? "Stored OK" : "Stored issue" : status.ok ? "Live" : "Degraded" : "Checking"}</b>
               </div>
               <p>{info.role}</p>
               <dl>
                 <div><dt>Status detail</dt><dd>{status?.detail ?? "Waiting for response"}</dd></div>
-                <div><dt>Last checked</dt><dd>{formatTimestamp(status?.checkedAt ?? payload?.generatedAt)}</dd></div>
+                <div><dt>{isCached ? "Checked for stored forecast" : "Last checked"}</dt><dd>{formatTimestamp(status?.checkedAt ?? payload?.generatedAt)}</dd></div>
                 {status?.dataTimestamp && <div><dt>Observation time</dt><dd>{formatTimestamp(status.dataTimestamp)}</dd></div>}
                 {status?.validThrough && <div><dt>Forecast valid through</dt><dd>{formatTimestamp(status.validThrough)}</dd></div>}
                 {key === "buoy" && !status?.dataTimestamp && <div><dt>Observation time</dt><dd>{formatTimestamp(payload?.buoy?.observedAt)}</dd></div>}
@@ -151,7 +152,7 @@ export default function DataSourcesPage() {
 
       <section className="method-note">
         <div><span className="eyebrow">How Forecast v3 works</span><h2>Nearshore spectral guidance, checked against what the ocean is doing now.</h2></div>
-        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and an empirical break-response multiplier. Long-, mid-, and short-period energy is transformed separately using direction and period, then recombined into typical modeled faces and a larger-set range. Tide values are interpolated to the forecast time; missing wind is labeled instead of invented. Regional buoy agreement affects confidence, and the La Jolla wind observation adjusts only Central County’s near-term wind. Future-day confidence is capped as the horizon grows. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
+        <p>Each break is paired with its nearest CDIP MOP point, shoreline orientation, tide range, and an empirical break-response multiplier. Long-, mid-, and short-period energy is transformed separately using direction and period, then recombined into typical modeled faces and a larger-set range. Tide values are interpolated only when nearby NOAA hours bracket the forecast time; missing or incomplete wave, tide, and wind data is labeled unavailable and excluded from scoring instead of invented. Regional buoy agreement affects confidence, and the La Jolla wind observation adjusts only coherent Central County forecast hours. Future-day confidence is capped as the horizon grows, and stored forecasts lose confidence as they age. These are guidance—not lifeguard reports or a substitute for observing local conditions.</p>
       </section>
     </main>
   );

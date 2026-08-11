@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import SurfMap from "./SurfMap";
+import { isFutureForecastDate, sanDiegoDateKey } from "../lib/forecast/dates";
 
 type Zone = "North County" | "Central" | "South Bay";
 type Rating = "Excellent" | "Good" | "Fair" | "Poor" | "Unavailable";
@@ -21,7 +22,7 @@ type Spot = {
   crowd: string;
   best: string;
   score: number;
-  swellDegrees: number;
+  swellDegrees: number | null;
   lat: number;
   lon: number;
   secondarySwell?: string;
@@ -35,24 +36,26 @@ type Spot = {
   hourly?: HourlyPoint[];
 };
 
-const initialSpots: Spot[] = [
-  { name: "Trestles", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", swellDegrees: 195, period: "14s", wind: "2 kt E", tide: "2.4 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 82, lat: 33.3833, lon: -117.5937 },
-  { name: "Oceanside", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "SSW", swellDegrees: 195, period: "13s", wind: "3 kt ESE", tide: "2.5 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 66, lat: 33.1937, lon: -117.3831 },
-  { name: "Tamarack", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 245, period: "13s", wind: "3 kt E", tide: "2.6 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 65, lat: 33.1477, lon: -117.3508 },
-  { name: "Ponto", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 245, period: "13s", wind: "3 kt E", tide: "2.6 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 67, lat: 33.0916, lon: -117.3160 },
-  { name: "Grandview", zone: "North County", height: "2–4 ft", rating: "Good", swell: "SW", swellDegrees: 230, period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 73, lat: 33.0774, lon: -117.3086 },
-  { name: "Swami’s", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SSW", swellDegrees: 195, period: "14s", wind: "2 kt E", tide: "2.7 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 81, lat: 33.0344, lon: -117.2926 },
-  { name: "Cardiff Reef", zone: "North County", height: "3–5 ft", rating: "Good", swell: "SW", swellDegrees: 225, period: "14s", wind: "2 kt E", tide: "2.8 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 79, lat: 33.0134, lon: -117.2850 },
-  { name: "Del Mar", zone: "North County", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 255, period: "13s", wind: "3 kt E", tide: "2.8 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 68, lat: 32.9595, lon: -117.2686 },
-  { name: "Blacks", zone: "Central", height: "4–6 ft", rating: "Excellent", swell: "WNW", swellDegrees: 285, period: "15s", wind: "3 kt E", tide: "2.8 ft rising", water: "69°", crowd: "Moderate", best: "6 AM–9 AM", score: 94, lat: 32.8875, lon: -117.2533 },
-  { name: "La Jolla Shores", zone: "Central", height: "1–3 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "12s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Busy", best: "6 AM–9 AM", score: 61, lat: 32.8570, lon: -117.2571 },
-  { name: "Windansea", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "13s", wind: "3 kt E", tide: "2.9 ft rising", water: "69°", crowd: "Light", best: "6 AM–9 AM", score: 64, lat: 32.8313, lon: -117.2818 },
-  { name: "Tourmaline", zone: "Central", height: "2–3 ft", rating: "Good", swell: "W", swellDegrees: 270, period: "12s", wind: "2 kt ENE", tide: "3.0 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 72, lat: 32.8057, lon: -117.2610 },
-  { name: "Crystal Pier", zone: "Central", height: "2–3 ft", rating: "Fair", swell: "W", swellDegrees: 270, period: "12s", wind: "3 kt E", tide: "3.0 ft rising", water: "70°", crowd: "Busy", best: "6 AM–9 AM", score: 64, lat: 32.7976, lon: -117.2574 },
-  { name: "Ocean Beach", zone: "Central", height: "2–4 ft", rating: "Fair", swell: "WSW", swellDegrees: 248, period: "13s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Light", best: "6 AM–9 AM", score: 63, lat: 32.7495, lon: -117.2526 },
-  { name: "Sunset Cliffs", zone: "Central", height: "3–5 ft", rating: "Good", swell: "WSW", swellDegrees: 255, period: "14s", wind: "3 kt E", tide: "3.1 ft rising", water: "70°", crowd: "Moderate", best: "6 AM–9 AM", score: 76, lat: 32.7202, lon: -117.2572 },
-  { name: "Coronado", zone: "South Bay", height: "1–3 ft", rating: "Fair", swell: "SW", swellDegrees: 225, period: "12s", wind: "4 kt E", tide: "3.2 ft rising", water: "71°", crowd: "Light", best: "6 AM–9 AM", score: 59, lat: 32.6800, lon: -117.1835 },
-  { name: "Imperial Beach", zone: "South Bay", height: "2–3 ft", rating: "Poor", swell: "SW", swellDegrees: 225, period: "11s", wind: "4 kt ESE", tide: "3.3 ft rising", water: "71°", crowd: "Light", best: "6 AM–9 AM", score: 43, lat: 32.5791, lon: -117.1324 },
+type SpotDefinition = Pick<Spot, "name" | "zone" | "lat" | "lon">;
+
+const spotDefinitions: SpotDefinition[] = [
+  { name: "Trestles", zone: "North County", lat: 33.3833, lon: -117.5937 },
+  { name: "Oceanside", zone: "North County", lat: 33.1937, lon: -117.3831 },
+  { name: "Tamarack", zone: "North County", lat: 33.1477, lon: -117.3508 },
+  { name: "Ponto", zone: "North County", lat: 33.0916, lon: -117.3160 },
+  { name: "Grandview", zone: "North County", lat: 33.0774, lon: -117.3086 },
+  { name: "Swami’s", zone: "North County", lat: 33.0344, lon: -117.2926 },
+  { name: "Cardiff Reef", zone: "North County", lat: 33.0134, lon: -117.2850 },
+  { name: "Del Mar", zone: "North County", lat: 32.9595, lon: -117.2686 },
+  { name: "Blacks", zone: "Central", lat: 32.8875, lon: -117.2533 },
+  { name: "La Jolla Shores", zone: "Central", lat: 32.8570, lon: -117.2571 },
+  { name: "Windansea", zone: "Central", lat: 32.8313, lon: -117.2818 },
+  { name: "Tourmaline", zone: "Central", lat: 32.8057, lon: -117.2610 },
+  { name: "Crystal Pier", zone: "Central", lat: 32.7976, lon: -117.2574 },
+  { name: "Ocean Beach", zone: "Central", lat: 32.7495, lon: -117.2526 },
+  { name: "Sunset Cliffs", zone: "Central", lat: 32.7202, lon: -117.2572 },
+  { name: "Coronado", zone: "South Bay", lat: 32.6800, lon: -117.1835 },
+  { name: "Imperial Beach", zone: "South Bay", lat: 32.5791, lon: -117.1324 },
 ];
 
 const zoneDefaults: Record<Zone, string> = {
@@ -60,24 +63,6 @@ const zoneDefaults: Record<Zone, string> = {
   Central: "Blacks",
   "South Bay": "Coronado",
 };
-
-const initialHourly = [
-  { time: "6 AM", height: 3.8, wind: 2, score: 88 },
-  { time: "7 AM", height: 4.4, wind: 3, score: 96 },
-  { time: "8 AM", height: 4.7, wind: 3, score: 92 },
-  { time: "9 AM", height: 4.3, wind: 4, score: 84 },
-  { time: "10 AM", height: 3.9, wind: 6, score: 69 },
-  { time: "11 AM", height: 3.5, wind: 8, score: 56 },
-  { time: "12 PM", height: 3.2, wind: 10, score: 44 },
-];
-
-const initialDays = [
-  { dateKey: "2026-07-21", day: "Today", date: "Jul 21", height: "4–6 ft", rating: "Good", period: "15s" },
-  { dateKey: "2026-07-22", day: "Wed", date: "Jul 22", height: "3–5 ft", rating: "Good", period: "14s" },
-  { dateKey: "2026-07-23", day: "Thu", date: "Jul 23", height: "2–4 ft", rating: "Fair", period: "12s" },
-  { dateKey: "2026-07-24", day: "Fri", date: "Jul 24", height: "3–4 ft", rating: "Fair", period: "13s" },
-  { dateKey: "2026-07-25", day: "Sat", date: "Jul 25", height: "4–6 ft", rating: "Good", period: "16s" },
-];
 
 type HourlyPoint = { time: string; height: number; wind: number | null; score: number };
 type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[] };
@@ -98,7 +83,7 @@ type ConditionsPayload = {
   providers?: Record<string, { ok: boolean; detail: string; checkedAt: string; dataTimestamp?: string }>;
 };
 
-function unavailableSpot(spot: Spot): Spot {
+function unavailableSpot(spot: SpotDefinition): Spot {
   return {
     ...spot,
     height: "—",
@@ -108,8 +93,10 @@ function unavailableSpot(spot: Spot): Spot {
     wind: "—",
     tide: "—",
     water: "—",
+    crowd: "—",
     best: "Data unavailable",
     score: 0,
+    swellDegrees: null,
     secondarySwell: "—",
     confidence: "Low",
     confidenceScore: 0,
@@ -117,6 +104,16 @@ function unavailableSpot(spot: Spot): Spot {
     modelPoint: "Unavailable",
     summary: "Waiting for live source data",
     hourly: [],
+  };
+}
+
+function normalizeDayLabel<T extends { dateKey: string; day: string; date: string }>(day: T): T {
+  const parsed = new Date(`${day.dateKey}T12:00:00-07:00`);
+  if (!Number.isFinite(parsed.getTime())) return day;
+  return {
+    ...day,
+    day: day.dateKey === sanDiegoDateKey() ? "Today" : new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/Los_Angeles" }).format(parsed),
+    date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }).format(parsed),
   };
 }
 
@@ -189,11 +186,11 @@ export default function Home() {
   const [zone, setZone] = useState<Zone>("Central");
   const [selectedName, setSelectedName] = useState("Blacks");
   const [units, setUnits] = useState<"FT" | "M">("FT");
-  const [spots, setSpots] = useState(initialSpots);
+  const [spots, setSpots] = useState(() => spotDefinitions.map(unavailableSpot));
   const [series, setSeries] = useState<ZoneSeries>({});
   const [dailyConditions, setDailyConditions] = useState<Record<string, DailyCondition[]>>({});
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
-  const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "cached" | "sample">("loading");
+  const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "cached" | "unavailable">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
   const spotlightRef = useRef<HTMLElement>(null);
@@ -205,7 +202,7 @@ export default function Home() {
     const loadConditions = () => {
       const controller = new AbortController();
       controllers.add(controller);
-      fetch("/api/conditions?rev=12", { signal: controller.signal, cache: "no-store" })
+      fetch("/api/conditions?rev=13", { signal: controller.signal, cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`Conditions request returned ${response.status}`);
         return response.json() as Promise<ConditionsPayload>;
@@ -214,30 +211,40 @@ export default function Home() {
         if (disposed || !payload.generatedAt || !Number.isFinite(new Date(payload.generatedAt).getTime())) throw new Error("Invalid conditions response");
         if ((payload.mode === "live" || payload.mode === "partial") && payload.conditions?.length) {
           const liveZones = new Set(payload.liveZones ?? []);
-          setSpots(initialSpots.map((spot) => {
+          setSpots(spotDefinitions.map((spot) => {
             const condition = payload.conditions?.find((item) => item.name === spot.name);
-            return condition && liveZones.has(spot.zone) ? { ...spot, ...condition } : unavailableSpot(spot);
+            return condition && liveZones.has(spot.zone) ? { ...unavailableSpot(spot), ...condition } : unavailableSpot(spot);
           }));
           setSeries(payload.zones ?? {});
           setDailyConditions(payload.dailyConditions ?? {});
           setSelectedDateKey((current) => current && payload.dailyConditions?.[current] ? current : null);
-          setDataMode(payload.cache?.state === "stale-cache" ? "cached" : payload.mode);
+          setDataMode(payload.cache?.state && payload.cache.state !== "origin" ? "cached" : payload.mode);
           const providers = Object.entries(payload.providers ?? {});
           const liveCount = providers.filter(([, status]) => status.ok).length;
           const cacheNote = payload.cache?.state === "stale-cache"
             ? `Showing the last successful forecast while sources refresh${payload.cache.refreshError ? `: ${payload.cache.refreshError}` : "."} `
-            : "";
+            : payload.cache?.state === "fresh-cache"
+              ? "Showing a stored forecast; provider status reflects its generation time. "
+              : "";
           setProviderSummary(providers.length ? `${cacheNote}${liveCount}/${providers.length} live data services at the stored forecast time. ${providers.map(([name, status]) => `${name}: ${status.detail}`).join(" · ")}` : "Live forecast data.");
         } else {
-          setDataMode("sample");
-          setProviderSummary("The live marine forecast could not be reached. Retrying on the next page load; these values are clearly marked sample data.");
+          setSpots(spotDefinitions.map(unavailableSpot));
+          setSeries({});
+          setDailyConditions({});
+          setSelectedDateKey(null);
+          setDataMode("unavailable");
+          setProviderSummary("The live marine forecast could not be reached. No forecast values are being shown; retrying automatically.");
         }
         setUpdatedAt(new Date(payload.generatedAt));
       })
       .catch((error: unknown) => {
         if ((error as { name?: string })?.name !== "AbortError" && !disposed) {
-          setDataMode("sample");
-          setProviderSummary("The live forecast request failed. Retrying automatically; these values are clearly marked sample data.");
+          setSpots(spotDefinitions.map(unavailableSpot));
+          setSeries({});
+          setDailyConditions({});
+          setSelectedDateKey(null);
+          setDataMode("unavailable");
+          setProviderSummary("The live forecast request failed. No forecast values are being shown; retrying automatically.");
           setUpdatedAt(new Date());
         }
       })
@@ -258,7 +265,8 @@ export default function Home() {
     };
   }, []);
 
-  const dayMetadata = series[zone]?.days?.length ? series[zone].days : dataMode === "sample" ? initialDays : [];
+  const todayDateKey = sanDiegoDateKey();
+  const dayMetadata = series[zone]?.days?.length ? series[zone].days.map(normalizeDayLabel).filter((day) => day.dateKey >= todayDateKey) : [];
   const days = dayMetadata.map((day) => {
     const forecast = dailyConditions[day.dateKey]?.find((item) => item.name === selectedName);
     return forecast ? {
@@ -266,23 +274,22 @@ export default function Home() {
       height: forecast.height ?? day.height,
       rating: forecast.rating ?? day.rating,
       period: forecast.period ?? day.period,
-    } : day;
+    } : { ...day, height: "—", sets: undefined, rating: "Unavailable" as const, period: "—" };
   });
   const activeDateKey = selectedDateKey ?? days[0]?.dateKey ?? null;
-  const todayDateKey = days[0]?.dateKey ?? null;
-  const isFuture = Boolean(activeDateKey && todayDateKey && activeDateKey !== todayDateKey);
+  const isFuture = isFutureForecastDate(activeDateKey);
   const activeDay = days.find((day) => day.dateKey === activeDateKey) ?? days[0];
   const displayedSpots = (() => {
     if (!isFuture || !activeDateKey) return spots;
     const forecast = dailyConditions[activeDateKey] ?? [];
     return spots.map((spot) => {
       const condition = forecast.find((item) => item.name === spot.name);
-      return condition ? { ...spot, ...condition } : unavailableSpot(spot);
+      return condition ? { ...unavailableSpot(spot), ...condition } : unavailableSpot(spot);
     });
   })();
   const zoneSpots = displayedSpots.filter((spot) => spot.zone === zone);
   const selected = displayedSpots.find((spot) => spot.name === selectedName) ?? displayedSpots.find((spot) => spot.name === "Blacks") ?? displayedSpots[0];
-  const hourly = selected.hourly?.length ? selected.hourly : series[zone]?.hourly?.length ? series[zone].hourly : dataMode === "sample" ? initialHourly : [];
+  const hourly = selected.hourly?.length ? selected.hourly : [];
   const updatedLabel = updatedAt
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).format(updatedAt)
     : "Connecting…";
@@ -324,7 +331,7 @@ export default function Home() {
         <div className="header-tools">
           <Link className="source-link" href="/data-sources">Data sources</Link>
           <span className={`updated ${dataMode}`} title={providerSummary}>
-            <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "sample" ? `Sample fallback · ${updatedLabel}` : dataMode === "cached" ? `Cached forecast · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
+            <i /> {dataMode === "loading" ? "Connecting live data…" : dataMode === "unavailable" ? `Forecast unavailable · ${updatedLabel}` : dataMode === "cached" ? `Cached forecast · ${updatedLabel}` : `${dataMode === "partial" ? "Partial live" : "Live"} · ${updatedLabel}`}
           </span>
           <button className="unit-toggle" onClick={() => setUnits(units === "FT" ? "M" : "FT")} aria-label="Toggle wave height units">
             <b>{units}</b><span>{units === "FT" ? "M" : "FT"}</span>
@@ -339,7 +346,7 @@ export default function Home() {
             zone={zone}
             selectedName={selected.name}
             units={units}
-            swellLabel={`${selected.swell} ${selected.swellDegrees}°`}
+            swellLabel={selected.swellDegrees == null ? "Swell unavailable" : `${selected.swell} ${selected.swellDegrees}°`}
             onSelect={focusSpot}
           />
         </section>
@@ -426,7 +433,7 @@ export default function Home() {
         <div><Logo /><b>San Diego Surf</b></div>
         <p>One clear read on the county’s coastline.</p>
         <Link className="source-line" href="/data-sources">
-          {dataMode === "loading" ? "Connecting to forecast sources" : dataMode === "sample" ? "Sample fallback" : dataMode === "cached" ? "Last successful forecast" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · CDIP MOP + spectra · Open-Meteo · NOAA CO-OPS
+          {dataMode === "loading" ? "Connecting to forecast sources" : dataMode === "unavailable" ? "Forecast unavailable—no values shown" : dataMode === "cached" ? "Last successful forecast" : dataMode === "partial" ? "Partial live estimates" : "Live estimates"} · CDIP MOP + spectra · Open-Meteo · NOAA CO-OPS
           <b>Source status & timestamps →</b>
         </Link>
       </footer>

@@ -1,204 +1,69 @@
-type Zone = "North County" | "Central" | "South Bay";
-type Rating = "Excellent" | "Good" | "Fair" | "Poor";
-
-type Profile = {
-  name: string;
-  zone: Zone;
-  swellTarget: number;
-  shoal: number;
-  tideLow: number;
-  tideHigh: number;
-  mopId: string;
-  shoreNormal: number;
-};
-
-type WaveComponent = {
-  height: number;
-  direction: number;
-  period: number;
-  band: "long" | "mid" | "short" | "bulk";
-};
-
-type WaveEstimate = {
-  height: number;
-  direction: number;
-  period: number;
-  nearshore: boolean;
-  components: WaveComponent[];
-  componentSource: "CDIP spectrum" | "Regional partitions" | "Bulk peak";
-};
-
-type HourlyData = {
-  time: string[];
-  wave_height?: Array<number | null>;
-  wave_direction?: Array<number | null>;
-  wave_period?: Array<number | null>;
-  swell_wave_height?: Array<number | null>;
-  swell_wave_direction?: Array<number | null>;
-  swell_wave_period?: Array<number | null>;
-  secondary_swell_wave_height?: Array<number | null>;
-  secondary_swell_wave_direction?: Array<number | null>;
-  secondary_swell_wave_period?: Array<number | null>;
-  wind_speed_10m?: Array<number | null>;
-  wind_direction_10m?: Array<number | null>;
-  spectral_components?: WaveComponent[][];
-};
+import { createForecastCache } from "../../../lib/forecast/cache.ts";
+import {
+  angularDifference,
+  cardinal,
+  componentFaceFeet,
+  conditionSummary,
+  forecastConfidence,
+  n,
+  nwsWindPoints,
+  profiles,
+  rating,
+  scoreConditions,
+  spotCoordinates,
+  spotHeight,
+  zoneLeadSpot,
+  zonePoints,
+  type CdipObservation,
+  type HourlyData,
+  type Profile,
+  type WaveComponent,
+  type WaveEstimate,
+  type Zone,
+} from "../../../lib/forecast/model.ts";
+import { fetchJson, fetchText, inRange, isFresh, parseCsvRows, settledMapWithConcurrency } from "../../../lib/forecast/providers.ts";
 
 type ForecastResponse = { hourly?: HourlyData; error?: boolean; reason?: string };
 type TidePrediction = { t: string; v: string; type?: string };
+type TideEstimate = { value: number | null; trend: "steady" | "rising" | "falling" | null };
+type TideFeed = { predictions: TidePrediction[]; complete: boolean };
 type ProviderStatus = { ok: boolean; detail: string; checkedAt: string; dataTimestamp?: string; validThrough?: string };
-type CdipObservation = { observedAt: string; station: string; name: string; lat: number; lon: number; depthM: number; waveHeightM: number; period: number; direction: number | null; waterC: number | null };
 type SpectrumComponent = { period: number; direction: number; heightM: number; energy: number };
 type CdipSpectrum = { observedAt: string; station: string; components: SpectrumComponent[] };
 type CoastalWind = { observedAt: string; station: string; speed: number; direction: number };
-type Confidence = { label: "High" | "Medium" | "Low"; score: number; reason: string };
-
-const profiles: Profile[] = [
-  { name: "Trestles", zone: "North County", swellTarget: 190, shoal: 1.12, tideLow: 1.0, tideHigh: 3.6, mopId: "D1207", shoreNormal: 209.49 },
-  { name: "Oceanside", zone: "North County", swellTarget: 225, shoal: 1.02, tideLow: 1.3, tideHigh: 4.0, mopId: "D0903", shoreNormal: 231.02 },
-  { name: "Tamarack", zone: "North County", swellTarget: 245, shoal: 1.02, tideLow: 1.1, tideHigh: 4.0, mopId: "D0845", shoreNormal: 238.01 },
-  { name: "Ponto", zone: "North County", swellTarget: 245, shoal: 1.08, tideLow: 1.3, tideHigh: 4.2, mopId: "D0775", shoreNormal: 248.53 },
-  { name: "Grandview", zone: "North County", swellTarget: 230, shoal: .95, tideLow: 1.5, tideHigh: 4.5, mopId: "D0757", shoreNormal: 256.52 },
-  { name: "Swami’s", zone: "North County", swellTarget: 225, shoal: 1.08, tideLow: 1.8, tideHigh: 4.4, mopId: "D0708", shoreNormal: 219.51 },
-  { name: "Cardiff Reef", zone: "North County", swellTarget: 225, shoal: 1.1, tideLow: 2.0, tideHigh: 4.8, mopId: "D0680", shoreNormal: 252.55 },
-  { name: "Del Mar", zone: "North County", swellTarget: 255, shoal: .95, tideLow: 1.0, tideHigh: 4.0, mopId: "D0620", shoreNormal: 264.49 },
-  { name: "Blacks", zone: "Central", swellTarget: 275, shoal: 1.32, tideLow: 1.5, tideHigh: 4.0, mopId: "D0537", shoreNormal: 270 },
-  { name: "La Jolla Shores", zone: "Central", swellTarget: 270, shoal: .65, tideLow: 1.4, tideHigh: 4.4, mopId: "D0500", shoreNormal: 299.45 },
-  { name: "Windansea", zone: "Central", swellTarget: 260, shoal: 1.02, tideLow: 1.8, tideHigh: 4.5, mopId: "D0457", shoreNormal: 267.47 },
-  { name: "Tourmaline", zone: "Central", swellTarget: 275, shoal: .72, tideLow: 2.0, tideHigh: 4.8, mopId: "D0416", shoreNormal: 226.29 },
-  { name: "Crystal Pier", zone: "Central", swellTarget: 270, shoal: .82, tideLow: 1.2, tideHigh: 4.0, mopId: "D0406", shoreNormal: 250.84 },
-  { name: "Ocean Beach", zone: "Central", swellTarget: 250, shoal: .98, tideLow: 1.2, tideHigh: 4.0, mopId: "D0348", shoreNormal: 296.97 },
-  { name: "Sunset Cliffs", zone: "Central", swellTarget: 255, shoal: 1.08, tideLow: 2.0, tideHigh: 4.8, mopId: "D0318", shoreNormal: 267 },
-  { name: "Coronado", zone: "South Bay", swellTarget: 225, shoal: .62, tideLow: 1.0, tideHigh: 3.8, mopId: "D0178", shoreNormal: 221.17 },
-  { name: "Imperial Beach", zone: "South Bay", swellTarget: 220, shoal: .88, tideLow: 1.2, tideHigh: 4.0, mopId: "D0053", shoreNormal: 267.47 },
-];
-
-const spotCoordinates: Record<string, [number, number]> = {
-  Trestles: [33.3833, -117.5937], Oceanside: [33.1937, -117.3831], Tamarack: [33.1477, -117.3508], Ponto: [33.0916, -117.3160],
-  Grandview: [33.0774, -117.3086], "Swami’s": [33.0344, -117.2926], "Cardiff Reef": [33.0134, -117.2850], "Del Mar": [32.9595, -117.2686],
-  Blacks: [32.8875, -117.2533], "La Jolla Shores": [32.8570, -117.2571], Windansea: [32.8313, -117.2818], Tourmaline: [32.8057, -117.2610],
-  "Crystal Pier": [32.7976, -117.2574], "Ocean Beach": [32.7495, -117.2526], "Sunset Cliffs": [32.7202, -117.2572], Coronado: [32.6800, -117.1835], "Imperial Beach": [32.5791, -117.1324],
-};
-
-const zonePoints: Record<Zone, { lat: number; lon: number; tideStation: string }> = {
-  "North County": { lat: 33.16, lon: -117.39, tideStation: "9410230" },
-  Central: { lat: 32.89, lon: -117.30, tideStation: "9410230" },
-  "South Bay": { lat: 32.63, lon: -117.22, tideStation: "9410170" },
-};
-
-const nwsWindPoints: Record<Zone, { lat: number; lon: number }> = {
-  "North County": { lat: 33.195, lon: -117.379 },
-  Central: { lat: 32.84, lon: -117.27 },
-  "South Bay": { lat: 32.58, lon: -117.12 },
-};
-
-const zoneLeadSpot: Record<Zone, string> = {
-  "North County": "Swami’s",
-  Central: "Blacks",
-  "South Bay": "Coronado",
-};
-
 type ZoneForecast = { marine: HourlyData; weather: HourlyData; windLive: boolean; regionalLive: boolean; windSource: "Open-Meteo" | "NWS" | "Unavailable" };
-type CacheState = "origin" | "fresh-cache" | "stale-cache";
-type CacheMeta = { state: CacheState; storedAt: string; ageSeconds: number; refreshError?: string };
-type CacheRow = { payload: string | null; fetched_at: number; fresh_until: number; stale_until: number; refresh_lock_until: number; last_error: string | null };
-type D1ResultLike = { meta?: { changes?: number }; results?: unknown[] };
-type D1StatementLike = { bind(...values: unknown[]): D1StatementLike; run(): Promise<D1ResultLike>; first<T>(): Promise<T | null> };
-type D1DatabaseLike = { prepare(query: string): D1StatementLike };
 
-const CACHE_KEY = "san-diego-conditions-v4";
-const FRESH_TTL_MS = 60 * 60 * 1000;
-const STALE_TTL_MS = 36 * 60 * 60 * 1000;
-const REFRESH_LEASE_MS = 45 * 1000;
-
-let cached: { freshUntil: number; staleUntil: number; storedAt: number; payload: Record<string, unknown> } | undefined;
-let negativeCache: { expires: number; payload: unknown } | undefined;
-let inFlight: ReturnType<typeof buildPayload> | undefined;
-
-const n = (value: number | null | undefined, fallback = 0) =>
-  typeof value === "number" && Number.isFinite(value) ? value : fallback;
-
-async function durableCacheDb(): Promise<D1DatabaseLike | null> {
-  const injected = (globalThis as typeof globalThis & { __FORECAST_CACHE_DB__?: D1DatabaseLike }).__FORECAST_CACHE_DB__;
-  if (injected) return injected;
-  try {
-    const worker = await import("cloudflare:workers");
-    return (worker.env as unknown as { DB?: D1DatabaseLike }).DB ?? null;
-  } catch {
-    return null;
-  }
+export function displayedDayIndexes(times: string[], start: number) {
+  const byDate = new Map<string, number[]>();
+  times.forEach((time, index) => {
+    const hour = Number(time.slice(11, 13));
+    if (index < start || hour < 5 || hour > 19) return;
+    const date = time.slice(0, 10);
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date)!.push(index);
+  });
+  return [...byDate.entries()].slice(0, 5);
 }
 
-async function initializeCache(db: D1DatabaseLike) {
-  await db.prepare(`CREATE TABLE IF NOT EXISTS forecast_cache (
-    cache_key TEXT PRIMARY KEY,
-    payload TEXT,
-    fetched_at INTEGER NOT NULL DEFAULT 0,
-    fresh_until INTEGER NOT NULL DEFAULT 0,
-    stale_until INTEGER NOT NULL DEFAULT 0,
-    refresh_lock_until INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT
-  )`).run();
-  await db.prepare("INSERT OR IGNORE INTO forecast_cache (cache_key) VALUES (?)").bind(CACHE_KEY).run();
+function hasCoherentWave(hourly: HourlyData, index: number) {
+  return coherentComponent(hourly.swell_wave_height?.[index], hourly.swell_wave_direction?.[index], hourly.swell_wave_period?.[index], "mid") != null
+    || coherentComponent(hourly.wave_height?.[index], hourly.wave_direction?.[index], hourly.wave_period?.[index], "bulk") != null;
 }
-
-async function readDurableCache(db: D1DatabaseLike) {
-  return db.prepare("SELECT payload, fetched_at, fresh_until, stale_until, refresh_lock_until, last_error FROM forecast_cache WHERE cache_key = ?")
-    .bind(CACHE_KEY).first<CacheRow>();
-}
-
-function parseCachedPayload(row: CacheRow | null): Record<string, unknown> | null {
-  if (!row?.payload) return null;
-  try {
-    const value = JSON.parse(row.payload);
-    return value && typeof value === "object" ? value as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
-}
-
-function cacheMeta(state: CacheState, storedAt: number, refreshError?: string): CacheMeta {
-  return {
-    state,
-    storedAt: new Date(storedAt).toISOString(),
-    ageSeconds: Math.max(0, Math.round((Date.now() - storedAt) / 1000)),
-    ...(refreshError ? { refreshError } : {}),
-  };
-}
-
-function payloadWithCache(payload: Record<string, unknown>, state: CacheState, storedAt: number, refreshError?: string) {
-  return { ...payload, cache: cacheMeta(state, storedAt, refreshError) };
-}
-
-async function claimRefreshLease(db: D1DatabaseLike, now: number) {
-  const result = await db.prepare("UPDATE forecast_cache SET refresh_lock_until = ?, last_attempt_at = ? WHERE cache_key = ? AND refresh_lock_until < ?")
-    .bind(now + REFRESH_LEASE_MS, now, CACHE_KEY, now).run();
-  return Number(result.meta?.changes ?? 0) > 0;
-}
-
-async function storeDurablePayload(db: D1DatabaseLike, payload: Record<string, unknown>, now: number) {
-  await db.prepare("UPDATE forecast_cache SET payload = ?, fetched_at = ?, fresh_until = ?, stale_until = ?, refresh_lock_until = 0, last_error = NULL WHERE cache_key = ?")
-    .bind(JSON.stringify(payload), now, now + FRESH_TTL_MS, now + STALE_TTL_MS, CACHE_KEY).run();
-}
-
-async function releaseRefreshLease(db: D1DatabaseLike, message: string) {
-  await db.prepare("UPDATE forecast_cache SET refresh_lock_until = 0, last_error = ? WHERE cache_key = ?")
-    .bind(message.slice(0, 240), CACHE_KEY).run();
-}
-
-const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-const hasNumericValues = (values: Array<number | null> | undefined, minimumLength: number) =>
-  Boolean(values && values.length >= minimumLength && values.some((value) => typeof value === "number" && Number.isFinite(value)));
 
 function hasUsableMarineForecast(hourly: HourlyData) {
   const length = hourly.time?.length ?? 0;
   if (length < 24) return false;
-  const hasHeight = hasNumericValues(hourly.swell_wave_height, length) || hasNumericValues(hourly.wave_height, length);
-  const hasDirection = hasNumericValues(hourly.swell_wave_direction, length) || hasNumericValues(hourly.wave_direction, length);
-  const hasPeriod = hasNumericValues(hourly.swell_wave_period, length) || hasNumericValues(hourly.wave_period, length);
-  return hasHeight && hasDirection && hasPeriod;
+  const timelineValid = hourly.time.every((time, index) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(time)
+    && Number.isFinite(pseudoLocalMs(time))
+    && (index === 0 || (pseudoLocalMs(time) - pseudoLocalMs(hourly.time[index - 1]) > 0
+      && pseudoLocalMs(time) - pseudoLocalMs(hourly.time[index - 1]) <= 3 * 60 * 60 * 1000)));
+  if (!timelineValid) return false;
+  const nowKey = localNowKey();
+  const current = nearestTimeIndex(hourly.time, nowKey, 2);
+  if (current < 0 || pseudoLocalMs(hourly.time.at(-1)!) - pseudoLocalMs(nowKey) < 4 * 24 * 60 * 60 * 1000) return false;
+  const days = displayedDayIndexes(hourly.time, current);
+  return hasCoherentWave(hourly, current) && days.length === 5 && days.every(([, indexes]) =>
+    indexes.filter((index) => hasCoherentWave(hourly, index)).length >= indexes.length * .8);
 }
 
 function alignWeatherToMarine(marineTimes: string[], weather: HourlyData) {
@@ -211,9 +76,12 @@ function alignWeatherToMarine(marineTimes: string[], weather: HourlyData) {
     const index = byTime.get(time);
     return index == null ? null : weather.wind_direction_10m?.[index] ?? null;
   });
-  const minimumCoverage = Math.min(24, marineTimes.length);
-  const usable = windSpeed.slice(0, minimumCoverage).filter((value) => typeof value === "number" && Number.isFinite(value)).length >= minimumCoverage * .8
-    && windDirection.slice(0, minimumCoverage).filter((value) => typeof value === "number" && Number.isFinite(value)).length >= minimumCoverage * .8;
+  const current = nearestTimeIndex(marineTimes, localNowKey(), 2);
+  const days = current < 0 ? [] : displayedDayIndexes(marineTimes, current);
+  const coherent = (index: number) => typeof windSpeed[index] === "number" && Number.isFinite(windSpeed[index])
+    && typeof windDirection[index] === "number" && Number.isFinite(windDirection[index]);
+  const usable = current >= 0 && coherent(current) && days.length === 5
+    && days.every(([, indexes]) => indexes.filter(coherent).length >= indexes.length * .8);
   return { usable, hourly: { time: marineTimes, wind_speed_10m: windSpeed, wind_direction_10m: windDirection } satisfies HourlyData };
 }
 
@@ -232,11 +100,7 @@ function localNowKey() {
 }
 
 function currentIndex(times: string[]) {
-  const key = localNowKey();
-  const exact = times.indexOf(key);
-  if (exact >= 0) return exact;
-  const later = times.findIndex((time) => time > key);
-  return later >= 0 ? later : 0;
+  return nearestTimeIndex(times, localNowKey(), 3);
 }
 
 function localKeyFromUtc(value: string) {
@@ -268,66 +132,6 @@ function localForecastTimeToIso(value: string | undefined) {
   const rendered = localKeyFromUtc(new Date(guess).toISOString());
   guess += target - pseudoLocalMs(rendered);
   return Number.isFinite(guess) ? new Date(guess).toISOString() : undefined;
-}
-
-function angularDifference(a: number, b: number) {
-  return Math.abs(((a - b + 540) % 360) - 180);
-}
-
-function cardinal(degrees: number) {
-  const points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-  return points[Math.round(((degrees % 360) / 22.5)) % 16];
-}
-
-function componentFaceFeet(profile: Profile, component: WaveComponent, nearshore: boolean) {
-  const directionalFit = Math.max(0, Math.cos(angularDifference(component.direction, profile.swellTarget) * Math.PI / 180));
-  // MOP points already include most refraction to 10 m depth, so retain a
-  // smaller final-break direction adjustment instead of applying it twice.
-  const exposure = nearshore ? .82 + .18 * directionalFit : .42 + .58 * directionalFit;
-  // Long-period energy continues to shoal more efficiently between the MOP
-  // point and breaking water. Keep the correction bounded until backtests can
-  // refine it per break.
-  const periodResponse = Math.max(.85, Math.min(1.28, 1 + (component.period - 12) * .025));
-  return Math.max(0, component.height * 3.28084 * profile.shoal * exposure * periodResponse);
-}
-
-function spotHeight(profile: Profile, wave: WaveEstimate) {
-  const contributions = wave.components.map((component) => componentFaceFeet(profile, component, wave.nearshore));
-  const faceFeet = Math.sqrt(contributions.reduce((sum, value) => sum + value ** 2, 0));
-  const typicalLow = Math.max(0, Math.round(faceFeet * .72));
-  const typicalHigh = Math.max(typicalLow + 1, Math.round(faceFeet * 1.02));
-  const setLow = Math.max(typicalHigh, Math.round(faceFeet * 1.08));
-  const setHigh = Math.max(setLow + 1, Math.round(faceFeet * 1.42));
-  return {
-    low: typicalLow,
-    high: typicalHigh,
-    label: `${typicalLow}–${typicalHigh} ft`,
-    sets: `${setLow}–${setHigh} ft`,
-    faceFeet,
-  };
-}
-
-function scoreConditions(profile: Profile, period: number, windSpeed: number | null, windDirection: number | null, tide: number, faceFeet: number) {
-  let score = 38;
-  const windUnavailable = windSpeed == null || windDirection == null;
-  score += Math.min(24, Math.max(0, (period - 7) * 3));
-  if (windSpeed != null && windDirection != null) {
-    // Meteorological direction is where wind comes from. Project it onto the
-    // seaward normal so direction matters less as wind speed approaches zero.
-    const onshoreComponent = windSpeed * Math.cos(angularDifference(windDirection, profile.shoreNormal) * Math.PI / 180);
-    score += Math.max(-18, Math.min(24, 12 - onshoreComponent * 2.3 - windSpeed * .8));
-  }
-  score += tide >= profile.tideLow && tide <= profile.tideHigh ? 10 : -4;
-  score += faceFeet >= 2 && faceFeet <= 8 ? 6 : faceFeet > 10 ? -5 : 0;
-  const bounded = Math.max(18, Math.min(98, Math.round(score)));
-  return windUnavailable ? Math.min(69, bounded) : bounded;
-}
-
-function rating(score: number): Rating {
-  if (score >= 86) return "Excellent";
-  if (score >= 70) return "Good";
-  if (score >= 50) return "Fair";
-  return "Poor";
 }
 
 function formatHour(time: string) {
@@ -375,120 +179,65 @@ function bestWindowSelection(candidates: number[], times: string[], scores: numb
 function bestWindow(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], start: number, mop?: HourlyData) {
   const candidates = surfableIndexes(marine.time, start, 12);
   if (!candidates.length) return { label: "No daylight window", score: 0 };
-  const scores = candidates.map((index) => {
+  const scored = candidates.flatMap((index) => {
     const wave = waveAt(profile, marine, index, mop);
+    if (!wave) return [];
     const wind = weather.wind_speed_10m?.[index] ?? null;
     const windDirection = weather.wind_direction_10m?.[index] ?? null;
     const tide = closestTide(tides, marine.time[index]).value;
     const face = spotHeight(profile, wave);
-    return scoreConditions(profile, wave.period, wind, windDirection, tide, face.faceFeet);
+    return [{ index, score: scoreConditions(profile, wave.period, wind, windDirection, tide, face.faceFeet) }];
   });
-  const selection = bestWindowSelection(candidates, marine.time, scores);
+  const selection = bestWindowSelection(scored.map((item) => item.index), marine.time, scored.map((item) => item.score));
   if (!selection) return { label: "No daylight window", score: 0 };
   return { label: `${formatHour(marine.time[selection.startIndex])}–${formatHour(marine.time[selection.endIndex])}`, score: selection.score };
 }
 
 function buildSpotHourly(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], start: number, mop?: HourlyData) {
-  return surfableIndexes(marine.time, start, 7).map((index) => {
+  return surfableIndexes(marine.time, start, 7).flatMap((index) => {
     const wave = waveAt(profile, marine, index, mop);
+    if (!wave) return [];
     const wind = weather.wind_speed_10m?.[index] ?? null;
     const windDirection = weather.wind_direction_10m?.[index] ?? null;
     const tide = closestTide(tides, marine.time[index]).value;
     const face = spotHeight(profile, wave);
-    return {
+    return [{
       time: formatHour(marine.time[index]),
       height: face.faceFeet,
       wind: wind == null ? null : Math.round(wind),
       score: scoreConditions(profile, wave.period, wind, windDirection, tide, face.faceFeet),
-    };
+    }];
   });
 }
 
-function closestTide(predictions: TidePrediction[], time: string) {
-  if (!predictions.length) return { value: 2.5, trend: "unknown" };
+function closestTide(predictions: TidePrediction[], time: string): TideEstimate {
+  if (!predictions.length) return { value: null, trend: null };
   const normalized = time.replace("T", " ").slice(0, 16);
+  const targetMs = pseudoLocalMs(normalized.replace(" ", "T"));
+  if (!Number.isFinite(targetMs)) return { value: null, trend: null };
   const nextIndex = predictions.findIndex((prediction) => prediction.t >= normalized);
-  const upperIndex = nextIndex < 0 ? predictions.length - 1 : nextIndex;
+  const upperIndex = nextIndex < 0 ? predictions.length : nextIndex;
   const lowerIndex = Math.max(0, upperIndex - 1);
   const lower = predictions[lowerIndex];
-  const upper = predictions[upperIndex];
-  const lowerValue = Number(lower?.v ?? 2.5);
-  const upperValue = Number(upper?.v ?? lowerValue);
+  const upper = predictions[Math.min(upperIndex, predictions.length - 1)];
+  const lowerValue = Number(lower?.v);
+  const upperValue = Number(upper?.v);
+  if (!lower || !upper || !Number.isFinite(lowerValue) || !Number.isFinite(upperValue)) return { value: null, trend: null };
   const lowerMs = pseudoLocalMs(lower.t.replace(" ", "T"));
   const upperMs = pseudoLocalMs(upper.t.replace(" ", "T"));
-  const targetMs = pseudoLocalMs(normalized.replace(" ", "T"));
+  const bracketed = targetMs >= lowerMs && targetMs <= upperMs;
+  if (!bracketed) return { value: null, trend: null };
+  if (lowerMs !== upperMs && upperMs - lowerMs > 3 * 60 * 60 * 1000) return { value: null, trend: null };
   const fraction = upperMs > lowerMs ? Math.max(0, Math.min(1, (targetMs - lowerMs) / (upperMs - lowerMs))) : 0;
   const value = lowerValue + (upperValue - lowerValue) * fraction;
   const delta = upperValue - lowerValue;
-  return { value, trend: Math.abs(delta) < .03 ? "steady" : delta > 0 ? "rising" : "falling" };
+  const trend = lowerMs === upperMs ? null : Math.abs(delta) < .03 ? "steady" : delta > 0 ? "rising" : "falling";
+  return { value, trend };
 }
 
-async function fetchJson<T>(provider: string, url: string): Promise<T> {
-  let response: Response;
-  try {
-    // Cloudflare's runtime owns restricted headers such as User-Agent. Let it set
-    // them instead of turning an otherwise healthy upstream request into a failure.
-    response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "network request failed";
-    console.error(`[conditions] ${provider} fetch failed: ${detail}`);
-    throw new Error(`${provider}: ${detail}`);
-  }
-
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 160).replace(/\s+/g, " ");
-    console.error(`[conditions] ${provider} returned ${response.status}: ${detail}`);
-    throw new Error(`${provider}: HTTP ${response.status}`);
-  }
-
-  try {
-    return await response.json() as T;
-  } catch {
-    console.error(`[conditions] ${provider} returned invalid JSON`);
-    throw new Error(`${provider}: invalid response`);
-  }
-}
-
-async function fetchText(provider: string, url: string, timeoutMs = 10_000): Promise<string> {
-  let response: Response;
-  try {
-    response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "network request failed";
-    console.error(`[conditions] ${provider} fetch failed: ${detail}`);
-    throw new Error(`${provider}: ${detail}`);
-  }
-  if (!response.ok) throw new Error(`${provider}: HTTP ${response.status}`);
-  return response.text();
-}
-
-function parseCsvRows(text: string) {
-  return text.trim().split(/\r?\n/).filter(Boolean).map((line) => line.split(","));
-}
-
-function isFresh(date: Date, maxAgeMs: number, futureToleranceMs = 15 * 60 * 1000) {
-  const age = Date.now() - date.getTime();
-  return Number.isFinite(date.getTime()) && age >= -futureToleranceMs && age <= maxAgeMs;
-}
-
-function inRange(value: number, minimum: number, maximum: number) {
-  return Number.isFinite(value) && value >= minimum && value <= maximum;
-}
-
-async function settledMapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>) {
-  const results = new Array<PromiseSettledResult<R>>(items.length);
-  let nextIndex = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      try {
-        results[index] = { status: "fulfilled", value: await task(items[index]) };
-      } catch (reason) {
-        results[index] = { status: "rejected", reason };
-      }
-    }
-  }));
-  return results;
+function formatTide(tide: TideEstimate) {
+  if (tide.value == null) return "Forecast unavailable";
+  return `${tide.value.toFixed(1)} ft${tide.trend ? ` ${tide.trend}` : ""}`;
 }
 
 const mopFrequencies = [.04, .045, .05, .055, .06, .065, .07, .075, .08, .085, .09, .095, .1013, .11, .12, .13, .14, .15, .16, .17, .18, .19, .2, .21, .22, .23, .24, .25];
@@ -587,7 +336,14 @@ async function fetchMopForecast(profile: Profile) {
   }).filter((row) => row.time && inRange(row.height, 0, 20) && inRange(row.period, 2, 35) && inRange(row.direction, 0, 360));
   if (values.length < 8) throw new Error(`CDIP MOP ${profile.mopId}: invalid forecast`);
   const nowKey = localNowKey();
-  if (nearestTimeIndex(values.map((row) => row.time), nowKey, 3) < 0 || pseudoLocalMs(values.at(-1)!.time) - pseudoLocalMs(nowKey) < 4 * 24 * 60 * 60 * 1000) {
+  const valueTimes = values.map((row) => row.time);
+  const current = nearestTimeIndex(valueTimes, nowKey, 3);
+  const timelineValid = valueTimes.every((time, index) => Number.isFinite(pseudoLocalMs(time))
+    && (index === 0 || (pseudoLocalMs(time) - pseudoLocalMs(valueTimes[index - 1]) > 0
+      && pseudoLocalMs(time) - pseudoLocalMs(valueTimes[index - 1]) <= 4 * 60 * 60 * 1000)));
+  const dayCoverage = current < 0 ? [] : displayedDayIndexes(valueTimes, current);
+  if (!timelineValid || current < 0 || dayCoverage.length !== 5
+    || dayCoverage.some(([date, indexes]) => indexes.length < (date === nowKey.slice(0, 10) ? 1 : 4))) {
     throw new Error(`CDIP MOP ${profile.mopId}: insufficient current or forward coverage`);
   }
   return {
@@ -691,14 +447,20 @@ function regionalPartitionsAt(marine: HourlyData, index: number) {
   return components;
 }
 
-function waveAt(profile: Profile, marine: HourlyData, index: number, mop?: HourlyData): WaveEstimate {
+function coherentComponent(height: number | null | undefined, direction: number | null | undefined, period: number | null | undefined, band: WaveComponent["band"]) {
+  return height != null && direction != null && period != null
+    && inRange(height, .05, 20) && inRange(direction, 0, 360) && inRange(period, 2, 35)
+    ? { height, direction, period, band } satisfies WaveComponent
+    : null;
+}
+
+function waveAt(profile: Profile, marine: HourlyData, index: number, mop?: HourlyData): WaveEstimate | null {
   const mopIndex = nearestTimeIndex(mop?.time, marine.time[index], 2);
   const nearshore = mopIndex >= 0;
   const source = nearshore ? mop! : marine;
   const sourceIndex = nearshore ? mopIndex : index;
-  const bulkHeight = n(source.wave_height?.[sourceIndex], n(source.swell_wave_height?.[sourceIndex], 1));
-  const bulkDirection = n(source.wave_direction?.[sourceIndex], n(source.swell_wave_direction?.[sourceIndex], 260));
-  const bulkPeriod = n(source.wave_period?.[sourceIndex], n(source.swell_wave_period?.[sourceIndex], 10));
+  const bulk = coherentComponent(source.wave_height?.[sourceIndex], source.wave_direction?.[sourceIndex], source.wave_period?.[sourceIndex], "bulk")
+    ?? coherentComponent(source.swell_wave_height?.[sourceIndex], source.swell_wave_direction?.[sourceIndex], source.swell_wave_period?.[sourceIndex], "mid");
   let componentSource: WaveEstimate["componentSource"] = "Bulk peak";
   let components = source.spectral_components?.[sourceIndex]?.filter((component) => component.height > .03) ?? [];
   if (components.length) {
@@ -708,16 +470,19 @@ function waveAt(profile: Profile, marine: HourlyData, index: number, mop?: Hourl
     if (components.length) {
       componentSource = "Regional partitions";
       if (nearshore) {
+        if (!bulk) return null;
         const partitionHeight = Math.sqrt(components.reduce((sum, component) => sum + component.height ** 2, 0));
-        const scale = partitionHeight > .05 ? bulkHeight / partitionHeight : 1;
+        const scale = partitionHeight > .05 ? bulk.height / partitionHeight : 1;
         components = components.map((component) => ({ ...component, height: component.height * scale }));
       }
     }
   }
-  if (!components.length) components = [{ height: bulkHeight, direction: bulkDirection, period: bulkPeriod, band: "bulk" }];
+  if (!components.length && bulk) components = [bulk];
+  if (!components.length) return null;
   components = [...components].sort((a, b) => componentFaceFeet(profile, b, nearshore) - componentFaceFeet(profile, a, nearshore));
   const primary = components[0];
-  return { height: bulkHeight, direction: primary.direction, period: primary.period, nearshore, components, componentSource };
+  const height = bulk?.height ?? Math.sqrt(components.reduce((sum, component) => sum + component.height ** 2, 0));
+  return { height, direction: primary.direction, period: primary.period, nearshore, components, componentSource };
 }
 
 function blendDirection(model: number, observed: number, weight: number) {
@@ -727,26 +492,36 @@ function blendDirection(model: number, observed: number, weight: number) {
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
 
-function correctWindForecast(weather: HourlyData, observation: CoastalWind, zone: Zone) {
+function windCorrectionIndex(weather: HourlyData, observation: CoastalWind, zone: Zone) {
   // La Jolla is a Central County station; do not imply county-wide correction.
-  if (zone !== "Central") return weather;
+  if (zone !== "Central") return -1;
   const observedKey = localKeyFromUtc(observation.observedAt);
   const observedIndex = nearestTimeIndex(weather.time, observedKey, 2);
+  if (observedIndex < 0) return -1;
+  const modeledObservedSpeed = weather.wind_speed_10m?.[observedIndex];
+  const modeledObservedDirection = weather.wind_direction_10m?.[observedIndex];
+  return modeledObservedSpeed == null || modeledObservedDirection == null ? -1 : observedIndex;
+}
+
+function correctWindForecast(weather: HourlyData, observation: CoastalWind, zone: Zone) {
+  const observedIndex = windCorrectionIndex(weather, observation, zone);
   if (observedIndex < 0) return weather;
-  const modeledObservedSpeed = n(weather.wind_speed_10m?.[observedIndex], observation.speed);
-  const modeledObservedDirection = n(weather.wind_direction_10m?.[observedIndex], observation.direction);
+  const observedKey = localKeyFromUtc(observation.observedAt);
+  const modeledObservedSpeed = weather.wind_speed_10m![observedIndex]!;
   const ageHours = Math.max(0, (Date.now() - Date.parse(observation.observedAt)) / 3_600_000);
   const ageWeight = Math.exp(-ageHours / 3);
   return {
     ...weather,
     wind_speed_10m: weather.time.map((time, index) => {
-      const modeled = n(weather.wind_speed_10m?.[index], modeledObservedSpeed);
+      const modeled = weather.wind_speed_10m?.[index];
+      if (modeled == null || weather.wind_direction_10m?.[index] == null) return null;
       const lead = Math.max(0, (pseudoLocalMs(time) - pseudoLocalMs(observedKey)) / 3_600_000);
       const weight = ageWeight * Math.exp(-lead / 18);
       return Math.max(0, modeled + (observation.speed - modeledObservedSpeed) * weight);
     }),
     wind_direction_10m: weather.time.map((time, index) => {
-      const modeled = n(weather.wind_direction_10m?.[index], modeledObservedDirection);
+      const modeled = weather.wind_direction_10m?.[index];
+      if (modeled == null || weather.wind_speed_10m?.[index] == null) return null;
       const lead = Math.max(0, (pseudoLocalMs(time) - pseudoLocalMs(observedKey)) / 3_600_000);
       return blendDirection(modeled, observation.direction, ageWeight * Math.exp(-lead / 18));
     }),
@@ -765,57 +540,11 @@ function nearestObservation(profile: Profile, observations: CdipObservation[]) {
   }, null);
 }
 
-function secondarySwellAt(wave: WaveEstimate, spectrum?: CdipSpectrum) {
+function secondarySwellAt(wave: WaveEstimate) {
   const primary = wave.components[0];
   const component = wave.components.slice(1).find((candidate) => !primary || Math.abs(candidate.period - primary.period) >= 2 || angularDifference(candidate.direction, primary.direction) >= 25)
-    ?? spectrum?.components?.[1];
   if (!component) return "No distinct secondary";
   return `${cardinal(component.direction)} · ${Math.round(component.period)}s`;
-}
-
-function forecastConfidence({ nearshore, observation, windObserved, tidesLive, windLive, horizonHours, offshoreHeight, nearshoreHeight, modelPeriod, modelDirection }: {
-  nearshore: boolean;
-  observation: { item: CdipObservation; distance: number } | null;
-  windObserved: boolean;
-  tidesLive: boolean;
-  windLive: boolean;
-  horizonHours: number;
-  offshoreHeight: number;
-  nearshoreHeight: number;
-  modelPeriod: number;
-  modelDirection: number;
-}): Confidence {
-  let score = 32;
-  const reasons: string[] = [];
-  if (nearshore) { score += 27; reasons.push("CDIP nearshore model"); }
-  const evidenceWeight = Math.exp(-Math.max(0, horizonHours) / 18);
-  if (observation && observation.distance <= 35) {
-    const heightResidual = Math.abs(observation.item.waveHeightM - offshoreHeight) / Math.max(.25, offshoreHeight);
-    const periodResidual = Math.abs(observation.item.period - modelPeriod);
-    const directionResidual = observation.item.direction == null ? 0 : angularDifference(observation.item.direction, modelDirection);
-    const agrees = heightResidual <= .4 && periodResidual <= 4 && directionResidual <= 55;
-    score += (agrees ? 10 : -8) * evidenceWeight;
-    reasons.push(agrees ? "regional buoy broadly agrees" : "regional buoy differs");
-  }
-  if (windObserved && evidenceWeight >= .2) { score += 8 * evidenceWeight; reasons.push("La Jolla wind adjusted"); }
-  if (tidesLive) score += 8;
-  if (windLive) score += 6;
-  if (nearshore && offshoreHeight > 0) {
-    const ratio = Math.abs(nearshoreHeight - offshoreHeight) / offshoreHeight;
-    score += ratio <= .35 ? 7 : ratio <= .7 ? 2 : -7;
-  }
-  score -= Math.min(42, Math.max(0, horizonHours) / 24 * 8);
-  const horizonCap = horizonHours > 72 ? 55 : horizonHours > 36 ? 77 : 96;
-  const rounded = Math.max(24, Math.min(horizonCap, Math.round(score)));
-  return { label: rounded >= 78 ? "High" : rounded >= 56 ? "Medium" : "Low", score: rounded, reason: reasons.slice(0, 3).join(" · ") || "regional model estimate" };
-}
-
-function conditionSummary(profile: Profile, period: number, windSpeed: number | null, windDirection: number | null, tide: number) {
-  const periodLabel = period >= 14 ? "Long-period" : period >= 10 ? "Mid-period" : "Short-period";
-  const windDifference = windDirection == null ? null : angularDifference(windDirection, (profile.shoreNormal + 180) % 360);
-  const windLabel = windSpeed == null || windDifference == null ? "wind forecast unavailable" : windDifference <= 55 && windSpeed <= 10 ? "clean offshore wind" : windSpeed <= 5 ? "light wind" : windDifference > 110 ? "onshore wind" : "cross-shore wind";
-  const tideLabel = tide >= profile.tideLow && tide <= profile.tideHigh ? "tide in range" : "tide outside ideal range";
-  return `${periodLabel} swell · ${windLabel} · ${tideLabel}`;
 }
 
 const windDirectionDegrees: Record<string, number> = {
@@ -913,9 +642,24 @@ async function fetchTides(station: string) {
   url.searchParams.set("interval", "h");
   url.searchParams.set("format", "json");
   const data = await fetchJson<{ predictions?: TidePrediction[] }>(`NOAA tides ${station}`, url.toString());
-  const predictions = (data.predictions ?? []).filter((prediction) => prediction.t && Number.isFinite(Number(prediction.v)));
+  const predictions = (data.predictions ?? [])
+    .filter((prediction) => typeof prediction.t === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(prediction.t)
+      && typeof prediction.v === "string" && prediction.v.trim() !== ""
+      && Number.isFinite(pseudoLocalMs(prediction.t.replace(" ", "T"))) && inRange(Number(prediction.v), -10, 15))
+    .sort((a, b) => a.t.localeCompare(b.t));
   if (!predictions.length) throw new Error(`NOAA tides ${station}: empty predictions`);
-  return predictions;
+  const nowKey = localNowKey();
+  const tideTimes = predictions.map((prediction) => prediction.t.replace(" ", "T"));
+  const currentPrediction = nearestTimeIndex(tideTimes, nowKey, 2);
+  const displayedDays = currentPrediction < 0 ? [] : displayedDayIndexes(tideTimes, currentPrediction);
+  const finalDisplayedHour = displayedDays.length === 5 ? `${displayedDays[4][0]}T19:00` : null;
+  const hasLargeGap = predictions.some((prediction, index) => index > 0
+    && pseudoLocalMs(prediction.t.replace(" ", "T")) - pseudoLocalMs(predictions[index - 1].t.replace(" ", "T")) > 3 * 60 * 60 * 1000);
+  const complete = closestTide(predictions, nowKey).value != null
+    && finalDisplayedHour != null
+    && closestTide(predictions, finalDisplayedHour).value != null
+    && !hasLargeGap;
+  return { predictions, complete } satisfies TideFeed;
 }
 
 async function fetchBuoy() {
@@ -935,44 +679,54 @@ async function fetchBuoy() {
   if (!isFresh(observedAt, 6 * 60 * 60 * 1000)) {
     throw new Error("NDBC observation is stale");
   }
+  const waveHeightM = parse(8);
+  const dominantPeriod = parse(9);
+  const meanDirection = parse(11);
+  const rawWaterC = parse(14);
+  if (waveHeightM == null || !inRange(waveHeightM, 0, 20)
+    || dominantPeriod == null || !inRange(dominantPeriod, 1, 40)
+    || meanDirection == null || !inRange(meanDirection, 0, 360)) {
+    throw new Error("NDBC observation is incomplete or out of range");
+  }
   const observation = {
     observedAt: observedAt.toISOString(),
-    waveHeightM: parse(8),
-    dominantPeriod: parse(9),
-    meanDirection: parse(11),
-    waterC: parse(14),
+    waveHeightM,
+    dominantPeriod,
+    meanDirection,
+    waterC: rawWaterC != null && inRange(rawWaterC, -5, 40) ? rawWaterC : null,
   };
-  if (observation.waveHeightM == null || observation.dominantPeriod == null || observation.meanDirection == null) {
-    throw new Error("NDBC observation is incomplete");
-  }
   return observation;
 }
 
 function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], mop?: HourlyData, leadProfile?: Profile) {
   const profile = leadProfile ?? profiles.find((item) => item.name === zoneLeadSpot[zone])!;
   const start = currentIndex(marine.time);
+  if (start < 0) return { hourly: [], days: [] };
   const hourly = buildSpotHourly(profile, marine, weather, tides, start, mop);
 
   const today = marine.time[start]?.slice(0, 10);
-  const uniqueDates = [...new Set(marine.time.slice(start).map((time) => time.slice(0, 10)))].slice(0, 5);
-  const days = uniqueDates.map((date) => {
+  const uniqueDates = displayedDayIndexes(marine.time, start).map(([date]) => date);
+  const days = uniqueDates.flatMap((date) => {
     const indexes = marine.time.map((time, index) => ({ time, index }))
       .filter(({ time, index }) => index >= start && time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19)
       .map(({ index }) => index);
-    const scores = indexes.map((index) => {
+    const scored = indexes.flatMap((index) => {
+      const hourWave = waveAt(profile, marine, index, mop);
+      if (!hourWave) return [];
       const wind = weather.wind_speed_10m?.[index] ?? null;
       const windDirection = weather.wind_direction_10m?.[index] ?? null;
       const tide = closestTide(tides, marine.time[index]).value;
-      const hourWave = waveAt(profile, marine, index, mop);
       const hourFace = spotHeight(profile, hourWave);
-      return scoreConditions(profile, hourWave.period, wind, windDirection, tide, hourFace.faceFeet);
+      return [{ index, score: scoreConditions(profile, hourWave.period, wind, windDirection, tide, hourFace.faceFeet) }];
     });
-    const selection = bestWindowSelection(indexes, marine.time, scores);
-    const representativeIndex = selection?.representativeIndex ?? indexes[0] ?? start;
+    const selection = bestWindowSelection(scored.map((item) => item.index), marine.time, scored.map((item) => item.score));
+    const representativeIndex = selection?.representativeIndex ?? scored[0]?.index;
+    if (representativeIndex == null) return [];
     const wave = waveAt(profile, marine, representativeIndex, mop);
+    if (!wave) return [];
     const face = spotHeight(profile, wave);
     const parsed = new Date(`${date}T12:00:00-07:00`);
-    return {
+    return [{
       dateKey: date,
       day: date === today ? "Today" : new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/Los_Angeles" }).format(parsed),
       date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }).format(parsed),
@@ -980,7 +734,7 @@ function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, ti
       sets: face.sets,
       rating: rating(selection?.score ?? 0),
       period: `${Math.round(wave.period)}s`,
-    };
+    }];
   });
   return { hourly, days };
 }
@@ -988,19 +742,21 @@ function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, ti
 function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], date: string, waterF: number | null, context: {
   mop?: HourlyData;
   observation: { item: CdipObservation; distance: number } | null;
-  spectrum?: CdipSpectrum;
   windObserved: boolean;
   tidesLive: boolean;
   windLive: boolean;
+  regionalLive: boolean;
   windSource: ZoneForecast["windSource"];
 }) {
   const candidates = marine.time.map((time, index) => ({ time, index }))
-    .filter(({ time }) => time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19)
+    .filter(({ time, index }) => time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19
+      && waveAt(profile, marine, index, context.mop) != null)
     .map(({ index }) => index);
   if (!candidates.length) return null;
 
   const scoreAt = (index: number) => {
     const wave = waveAt(profile, marine, index, context.mop);
+    if (!wave) return 0;
     const wind = weather.wind_speed_10m?.[index] ?? null;
     const windDirection = weather.wind_direction_10m?.[index] ?? null;
     const tide = closestTide(tides, marine.time[index]).value;
@@ -1013,19 +769,25 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
   if (!selection) return null;
   const index = selection.representativeIndex;
   const wave = waveAt(profile, marine, index, context.mop);
+  if (!wave) return null;
   const windSpeed = weather.wind_speed_10m?.[index] ?? null;
   const windDirection = weather.wind_direction_10m?.[index] ?? null;
   const tide = closestTide(tides, marine.time[index]);
   const face = spotHeight(profile, wave);
   const chartIndexes = candidates.filter((_, position) => position % 2 === 0).slice(0, 7);
-  const offshoreHeight = n(marine.swell_wave_height?.[index], n(marine.wave_height?.[index], wave.height));
+  const regionalSwellHeight = marine.swell_wave_height?.[index];
+  const regionalBulkHeight = marine.wave_height?.[index];
+  const offshoreHeight = context.regionalLive
+    ? typeof regionalSwellHeight === "number" && Number.isFinite(regionalSwellHeight) ? regionalSwellHeight
+      : typeof regionalBulkHeight === "number" && Number.isFinite(regionalBulkHeight) ? regionalBulkHeight : null
+    : null;
   const horizonHours = Math.max(0, (pseudoLocalMs(marine.time[index]) - pseudoLocalMs(localNowKey())) / 3_600_000);
   const confidence = forecastConfidence({
     nearshore: wave.nearshore,
     observation: context.observation,
-    windObserved: context.windObserved,
-    tidesLive: context.tidesLive,
-    windLive: context.windLive,
+    windObserved: context.windObserved && windSpeed != null && windDirection != null,
+    tidesLive: context.tidesLive && tide.value != null,
+    windLive: context.windLive && windSpeed != null && windDirection != null,
     horizonHours,
     offshoreHeight,
     nearshoreHeight: wave.height,
@@ -1042,11 +804,11 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
     swell: cardinal(wave.direction),
     swellDegrees: Math.round(wave.direction),
     period: `${Math.round(wave.period)}s`,
-    secondarySwell: secondarySwellAt(wave, context.spectrum),
+    secondarySwell: secondarySwellAt(wave),
     secondarySwellSource: wave.componentSource,
     wind: windSpeed == null || windDirection == null ? "Forecast unavailable" : `${Math.round(windSpeed)} kt ${cardinal(windDirection)}`,
     windSource: context.windSource,
-    tide: `${tide.value.toFixed(1)} ft ${tide.trend}`,
+    tide: formatTide(tide),
     water: waterF == null ? "—" : `${waterF}°`,
     best: `${formatHour(marine.time[selection.startIndex])}–${formatHour(marine.time[selection.endIndex])}`,
     confidence: confidence.label,
@@ -1058,7 +820,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
       time: formatHour(marine.time[hourIndex]),
       height: (() => {
         const chartWave = waveAt(profile, marine, hourIndex, context.mop);
-        return spotHeight(profile, chartWave).faceFeet;
+        return chartWave ? spotHeight(profile, chartWave).faceFeet : 0;
       })(),
       wind: weather.wind_speed_10m?.[hourIndex] == null ? null : Math.round(weather.wind_speed_10m![hourIndex]!),
       score: scoreAt(hourIndex),
@@ -1073,8 +835,8 @@ async function buildPayload() {
       console.error(`[conditions] Open-Meteo batch unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
       return { ok: false as const, value: new Map<Zone, ZoneForecast>() };
     }),
-    fetchTides("9410230").then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const, value: [] as TidePrediction[] })),
-    fetchTides("9410170").then((value) => ({ ok: true as const, value })).catch(() => ({ ok: false as const, value: [] as TidePrediction[] })),
+    fetchTides("9410230").then((feed) => ({ ok: feed.complete, value: feed.predictions })).catch(() => ({ ok: false, value: [] as TidePrediction[] })),
+    fetchTides("9410170").then((feed) => ({ ok: feed.complete, value: feed.predictions })).catch(() => ({ ok: false, value: [] as TidePrediction[] })),
     fetchBuoy().then((value) => ({ ok: true as const, value })).catch((error) => {
       console.error(`[conditions] NDBC buoy fetch failed: ${error instanceof Error ? error.message : "unknown error"}`);
       return { ok: false as const, value: null };
@@ -1154,20 +916,16 @@ async function buildPayload() {
       windSource: aligned?.usable ? "NWS" as const : "Unavailable" as const,
     };
   };
-  const spectrumByZone = new Map<Zone, CdipSpectrum>();
-  if (spectrumResult.value) {
-    spectrumByZone.set("North County", spectrumResult.value);
-    spectrumByZone.set("Central", spectrumResult.value);
-  }
-
   const conditions = profiles.flatMap((profile) => {
     const data = dataForProfile(profile);
     if (!data) return [];
     const tides = profile.zone === "South Bay" ? sanDiegoTides : laJollaTides;
     const tidesLive = profile.zone === "South Bay" ? sanDiegoTideResult.ok : laJollaTideResult.ok;
     const index = currentIndex(data.marine.time);
+    if (index < 0) return [];
     const mop = mopBySpot.get(profile.name);
     const wave = waveAt(profile, data.marine, index, mop);
+    if (!wave) return [];
     const observation = nearestObservation(profile, cdipResult.value);
     const windSpeed = data.weather.wind_speed_10m?.[index] ?? null;
     const windDirection = data.weather.wind_direction_10m?.[index] ?? null;
@@ -1177,19 +935,22 @@ async function buildPayload() {
     const window = bestWindow(profile, data.marine, data.weather, tides, index, mop);
     const waterC = observation?.item.waterC ?? buoyResult.value?.waterC ?? null;
     const waterF = waterC != null ? Math.round(waterC * 9 / 5 + 32) : null;
+    const windObservationApplied = Boolean(windObservationResult.value && data.windLive && profile.zone === "Central"
+      && windCorrectionIndex(data.weather, windObservationResult.value, profile.zone) >= 0);
     const confidence = forecastConfidence({
       nearshore: wave.nearshore,
       observation,
-      windObserved: windObservationResult.ok && data.windLive && profile.zone === "Central",
-      tidesLive,
-      windLive: data.windLive,
+      windObserved: windObservationApplied && windSpeed != null && windDirection != null,
+      tidesLive: tidesLive && tide.value != null,
+      windLive: data.windLive && windSpeed != null && windDirection != null,
       horizonHours: 0,
-      offshoreHeight: n(data.marine.swell_wave_height?.[index], n(data.marine.wave_height?.[index], wave.height)),
+      offshoreHeight: data.regionalLive
+        ? n(data.marine.swell_wave_height?.[index], n(data.marine.wave_height?.[index], 0)) || null
+        : null,
       nearshoreHeight: wave.height,
       modelPeriod: wave.period,
       modelDirection: wave.direction,
     });
-    const observedSpectrum = spectrumByZone.get(profile.zone);
     return [{
       name: profile.name,
       height: face.label,
@@ -1200,11 +961,11 @@ async function buildPayload() {
       swell: cardinal(wave.direction),
       swellDegrees: Math.round(wave.direction),
       period: `${Math.round(wave.period)}s`,
-      secondarySwell: secondarySwellAt(wave, observedSpectrum),
+      secondarySwell: secondarySwellAt(wave),
       secondarySwellSource: wave.componentSource,
       wind: windSpeed == null || windDirection == null ? "Forecast unavailable" : `${Math.round(windSpeed)} kt ${cardinal(windDirection)}`,
       windSource: data.windSource,
-      tide: `${tide.value.toFixed(1)} ft ${tide.trend}`,
+      tide: formatTide(tide),
       water: waterF == null ? "—" : `${waterF}°`,
       best: window.label,
       confidence: confidence.label,
@@ -1228,8 +989,10 @@ async function buildPayload() {
   }));
 
   const firstLiveZone = zones.find((zone) => zoneData.has(zone));
-  const dailyDateKeys = firstLiveZone
-    ? [...new Set(zoneData.get(firstLiveZone)!.marine.time.slice(currentIndex(zoneData.get(firstLiveZone)!.marine.time)).map((time) => time.slice(0, 10)))].slice(0, 5)
+  const firstLiveMarine = firstLiveZone ? zoneData.get(firstLiveZone)!.marine : null;
+  const firstLiveIndex = firstLiveMarine ? currentIndex(firstLiveMarine.time) : -1;
+  const dailyDateKeys = firstLiveMarine && firstLiveIndex >= 0
+    ? displayedDayIndexes(firstLiveMarine.time, firstLiveIndex).map(([date]) => date)
     : [];
   const dailyConditions = Object.fromEntries(dailyDateKeys.map((date) => [date, profiles.flatMap((profile) => {
     const data = dataForProfile(profile);
@@ -1241,9 +1004,11 @@ async function buildPayload() {
     const forecast = buildDailySpot(profile, data.marine, data.weather, tides, date, waterF, {
       mop: mopBySpot.get(profile.name),
       observation,
-      windObserved: windObservationResult.ok && data.windLive && profile.zone === "Central",
+      windObserved: Boolean(windObservationResult.value && data.windLive && profile.zone === "Central"
+        && windCorrectionIndex(data.weather, windObservationResult.value, profile.zone) >= 0),
       tidesLive: profile.zone === "South Bay" ? sanDiegoTideResult.ok : laJollaTideResult.ok,
       windLive: data.windLive,
+      regionalLive: data.regionalLive,
       windSource: data.windSource,
     });
     return forecast ? [forecast] : [];
@@ -1256,21 +1021,30 @@ async function buildPayload() {
   const mopLiveCount = mopBySpot.size;
   const mopSpectralCount = [...mopBySpot.values()].filter((value) => value.spectral_components?.some((components) => components.length > 1)).length;
   const completeWaveCoverage = mopLiveCount === profiles.length || regionalMarineLiveCount === zones.length;
-  const coreForecastLive = completeWaveCoverage && allWindLive && laJollaTideResult.ok && sanDiegoTideResult.ok;
+  const completeCurrentCoverage = conditions.length === profiles.length;
+  const completeCurrentWindCoverage = completeCurrentCoverage && conditions.every((condition) => condition.wind !== "Forecast unavailable");
+  const coreForecastLive = completeWaveCoverage && completeCurrentCoverage && allWindLive && completeCurrentWindCoverage && laJollaTideResult.ok && sanDiegoTideResult.ok;
   const generatedAt = new Date().toISOString();
   const mopValidThrough = [...mopBySpot.values()].map((value) => (value as HourlyData & { dataTimestamp?: string }).dataTimestamp).filter((value): value is string => Boolean(value)).sort()[0];
-  const marineValidThrough = firstLiveZone ? localForecastTimeToIso(zoneData.get(firstLiveZone)?.marine.time.at(-1)) : undefined;
-  const windValidThrough = firstLiveZone ? localForecastTimeToIso(zoneData.get(firstLiveZone)?.weather.time.at(-1)) : undefined;
+  const minimumValidThrough = (values: Array<string | undefined>) => values.filter((value): value is string => Boolean(value)).sort()[0];
+  const marineValidThrough = minimumValidThrough([...zoneData.values()].filter((data) => data.regionalLive)
+    .map((data) => localForecastTimeToIso(data.marine.time.at(-1))));
+  const windValidThrough = minimumValidThrough([...zoneData.values()].filter((data) => data.windLive)
+    .map((data) => localForecastTimeToIso(data.weather.time.at(-1))));
   const tideValidThrough = localForecastTimeToIso([laJollaTides.at(-1)?.t, sanDiegoTides.at(-1)?.t].filter((value): value is string => Boolean(value)).sort()[0]);
-  const centralWindAdjusted = Boolean(windObservationResult.ok && zoneData.get("Central")?.windLive);
+  const centralData = zoneData.get("Central");
+  const centralWindAdjusted = Boolean(windObservationResult.value && centralData?.windLive
+    && windCorrectionIndex(centralData.weather, windObservationResult.value, "Central") >= 0);
+  const regionalSecondaryCount = [...zoneData.values()].filter((data) => data.regionalLive
+    && data.marine.secondary_swell_wave_height?.some((height, index) => coherentComponent(height, data.marine.secondary_swell_wave_direction?.[index], data.marine.secondary_swell_wave_period?.[index], "short") != null)).length;
   const providers: Record<string, ProviderStatus> = {
     mop: { ok: mopLiveCount === profiles.length, detail: `${mopLiveCount}/${profiles.length} break-adjacent CDIP model points live; ${mopSpectralCount} include forecast spectral partitions`, checkedAt: generatedAt, validThrough: mopValidThrough },
     cdip: { ok: cdipResult.ok, detail: cdipResult.ok ? `${cdipResult.value.length} fresh San Diego-area buoy observations` : "Nearshore observation feed unavailable", checkedAt: generatedAt, dataTimestamp: cdipResult.value[0]?.observedAt },
-    spectra: { ok: mopSpectralCount > 0 || spectrumResult.ok, detail: `${mopSpectralCount}/${mopLiveCount || profiles.length} live MOP points include long-, mid-, and short-period forecast energy${spectrumResult.ok ? "; Torrey Pines Outer observation also live" : ""}`, checkedAt: generatedAt, dataTimestamp: spectrumResult.value?.observedAt },
-    marine: { ok: regionalMarineLiveCount === 3, detail: regionalMarineLiveCount === 3 ? "3/3 regional forecast zones live with secondary-swell components" : `${regionalMarineLiveCount}/3 regional zones live; CDIP nearshore forecasts cover ${liveZones}/3 zones`, checkedAt: generatedAt, validThrough: marineValidThrough },
-    wind: { ok: allWindLive, detail: `${windLiveCount}/${zones.length} forecast zones live · ${zones.map((zone) => `${zone}: ${zoneData.get(zone)?.windSource ?? "Unavailable"}`).join("; ")}${allWindLive ? "" : "; missing wind is shown as unavailable, never fabricated"}`, checkedAt: generatedAt, validThrough: windValidThrough },
+    spectra: { ok: mopSpectralCount > 0, detail: `${mopSpectralCount}/${mopLiveCount || profiles.length} live MOP points include long-, mid-, and short-period forecast energy${spectrumResult.ok ? "; Torrey Pines Outer spectrum is available for monitoring only" : ""}`, checkedAt: generatedAt, dataTimestamp: spectrumResult.value?.observedAt },
+    marine: { ok: regionalMarineLiveCount === 3, detail: `${regionalMarineLiveCount}/3 regional forecast zones have complete five-day wave coverage; ${regionalSecondaryCount}/${regionalMarineLiveCount || 3} include coherent secondary-swell components${regionalMarineLiveCount === 3 ? "" : `; CDIP nearshore forecasts cover ${liveZones}/3 zones`}`, checkedAt: generatedAt, validThrough: marineValidThrough },
+    wind: { ok: allWindLive && completeCurrentWindCoverage, detail: `${windLiveCount}/${zones.length} forecast zones live · ${zones.map((zone) => `${zone}: ${zoneData.get(zone)?.windSource ?? "Unavailable"}`).join("; ")}${allWindLive && completeCurrentWindCoverage ? "" : "; missing wind is shown as unavailable, never fabricated"}`, checkedAt: generatedAt, validThrough: windValidThrough },
     windObservation: { ok: centralWindAdjusted, detail: centralWindAdjusted ? "La Jolla observation adjusts Central County wind only, with time decay" : "Using uncorrected forecast wind", checkedAt: generatedAt, dataTimestamp: windObservationResult.value?.observedAt },
-    tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations live`, checkedAt: generatedAt, validThrough: tideValidThrough },
+    tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations have complete five-day coverage; unbracketed hours are unavailable`, checkedAt: generatedAt, validThrough: tideValidThrough },
     buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 fallback observation live" : "CDIP observations are primary", checkedAt: generatedAt, dataTimestamp: buoyResult.value?.observedAt },
   };
   return {
@@ -1284,7 +1058,7 @@ async function buildPayload() {
     providers,
     sources: [
       { name: "CDIP MOP", role: "Break-adjacent nearshore wave forecasts" },
-      { name: "CDIP observations", role: "Regional buoy agreement checks and observed directional spectral peaks" },
+      { name: "CDIP observations", role: "Regional buoy agreement checks, water temperature, and source monitoring" },
       { name: "Open-Meteo", role: "Regional waves, secondary swell, and wind forecast" },
       { name: "National Weather Service", role: "Independent hourly wind fallback when Open-Meteo is rate-limited" },
       { name: "NOAA CO-OPS", role: "Tide predictions and coastal wind observations" },
@@ -1293,102 +1067,8 @@ async function buildPayload() {
   };
 }
 
+const respondWithForecastCache = createForecastCache();
+
 export async function GET() {
-  const now = Date.now();
-  const cacheHeaders = (state: string, cacheControl = "public, s-maxage=900, stale-while-revalidate=86400") => ({
-    "Cache-Control": cacheControl,
-    "X-Data-Cache": state,
-  });
-  if (cached && cached.freshUntil > now) {
-    return Response.json(payloadWithCache(cached.payload, "fresh-cache", cached.storedAt), { headers: cacheHeaders("MEMORY-HIT") });
-  }
-  if (negativeCache && negativeCache.expires > now && !cached) {
-    return Response.json(negativeCache.payload, { headers: { "Cache-Control": "no-store", "X-Data-Cache": "NEGATIVE-HIT" } });
-  }
-
-  let db: D1DatabaseLike | null = null;
-  let durableRow: CacheRow | null = null;
-  try {
-    db = await durableCacheDb();
-    if (db) {
-      await initializeCache(db);
-      durableRow = await readDurableCache(db);
-      const durablePayload = parseCachedPayload(durableRow);
-      if (durablePayload && durableRow && durableRow.fresh_until > now) {
-        cached = { freshUntil: durableRow.fresh_until, staleUntil: durableRow.stale_until, storedAt: durableRow.fetched_at, payload: durablePayload };
-        return Response.json(payloadWithCache(durablePayload, "fresh-cache", durableRow.fetched_at), { headers: cacheHeaders("DURABLE-HIT") });
-      }
-    }
-  } catch (error) {
-    console.error(`[conditions] durable cache read failed: ${error instanceof Error ? error.message : "unknown error"}`);
-    db = null;
-  }
-
-  const durableStale = durableRow && durableRow.stale_until > now ? parseCachedPayload(durableRow) : null;
-  const memoryStale = cached && cached.staleUntil > now ? cached.payload : null;
-  const stalePayload = durableStale ?? memoryStale;
-  const staleStoredAt = durableStale && durableRow ? durableRow.fetched_at : cached?.storedAt ?? now;
-
-  if (db) {
-    try {
-      const ownsRefresh = await claimRefreshLease(db, now);
-      if (!ownsRefresh) {
-        if (stalePayload) {
-          return Response.json(payloadWithCache(stalePayload, "stale-cache", staleStoredAt, durableRow?.last_error ?? "Refresh already in progress"), { headers: cacheHeaders("STALE-WHILE-REFRESH") });
-        }
-        for (let attempt = 0; attempt < 16; attempt++) {
-          await delay(500);
-          const waitingRow = await readDurableCache(db);
-          const waitingPayload = parseCachedPayload(waitingRow);
-          if (waitingPayload && waitingRow) {
-            const state: CacheState = waitingRow.fresh_until > Date.now() ? "fresh-cache" : "stale-cache";
-            return Response.json(payloadWithCache(waitingPayload, state, waitingRow.fetched_at, waitingRow.last_error ?? undefined), { headers: cacheHeaders("DURABLE-WAIT-HIT") });
-          }
-        }
-        const waitingPayload = { mode: "unavailable", generatedAt: new Date().toISOString(), conditions: [], zones: {}, providers: {}, sources: [], cache: { state: "origin", storedAt: new Date().toISOString(), ageSeconds: 0, refreshError: "Forecast refresh is still in progress" } };
-        return Response.json(waitingPayload, { headers: cacheHeaders("REFRESH-IN-PROGRESS", "no-store") });
-      }
-    } catch (error) {
-      console.error(`[conditions] durable refresh lease failed: ${error instanceof Error ? error.message : "unknown error"}`);
-      db = null;
-    }
-  }
-
-  try {
-    inFlight ??= buildPayload().finally(() => { inFlight = undefined; });
-    const payload = await inFlight;
-    if (payload.mode !== "unavailable") {
-      const storedAt = Date.now();
-      const record = payload as unknown as Record<string, unknown>;
-      cached = { freshUntil: storedAt + FRESH_TTL_MS, staleUntil: storedAt + STALE_TTL_MS, storedAt, payload: record };
-      if (db) {
-        try { await storeDurablePayload(db, record, storedAt); }
-        catch (error) { console.error(`[conditions] durable cache write failed: ${error instanceof Error ? error.message : "unknown error"}`); }
-      }
-      negativeCache = undefined;
-      return Response.json(payloadWithCache(record, "origin", storedAt), { headers: cacheHeaders("REFRESH") });
-    } else {
-      negativeCache = { expires: Date.now() + 20 * 1000, payload };
-      const message = "No usable regional or CDIP nearshore forecast was available";
-      if (db) {
-        try { await releaseRefreshLease(db, message); }
-        catch (error) { console.error(`[conditions] durable cache release failed: ${error instanceof Error ? error.message : "unknown error"}`); }
-      }
-      if (stalePayload) {
-        return Response.json(payloadWithCache(stalePayload, "stale-cache", staleStoredAt, message), { headers: cacheHeaders("STALE-IF-ERROR") });
-      }
-      return Response.json(payload, { headers: cacheHeaders("MISS-UNAVAILABLE", "no-store") });
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-    console.error(`[conditions] payload build failed: ${message}`);
-    if (db) {
-      try { await releaseRefreshLease(db, message); }
-      catch (releaseError) { console.error(`[conditions] durable cache release failed: ${releaseError instanceof Error ? releaseError.message : "unknown error"}`); }
-    }
-    if (stalePayload) {
-      return Response.json(payloadWithCache(stalePayload, "stale-cache", staleStoredAt, message), { headers: cacheHeaders("STALE-IF-ERROR") });
-    }
-    return Response.json({ mode: "unavailable", generatedAt: new Date().toISOString(), conditions: [], zones: {}, providers: {}, sources: [] }, { status: 200, headers: { "Cache-Control": "no-store" } });
-  }
+  return respondWithForecastCache(buildPayload);
 }
