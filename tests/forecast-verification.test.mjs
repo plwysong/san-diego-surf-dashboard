@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { componentFaceFeet, forecastConfidence, profiles } from "../lib/forecast/model.ts";
+import { componentFaceFeet, conditionSummary, forecastConfidence, profiles } from "../lib/forecast/model.ts";
 import { evaluateForecastSkill, groupForecastSkill } from "../lib/forecast/verification.ts";
 
 const sample = (overrides = {}) => ({
@@ -88,4 +88,35 @@ test("confidence tracks how much of the spectrum CDIP actually observed", () => 
   // Off the nearshore model there is no credit to scale.
   const regional = forecastConfidence({ ...base, nearshore: false, inputCoverage: 0.6 });
   assert.equal(regional.score, forecastConfidence({ ...base, nearshore: false }).score);
+});
+
+test("the summary names spectral width and gustiness only at the tails", () => {
+  const blacks = profiles.find((profile) => profile.name === "Blacks");
+  const offshore = (blacks.shoreNormal + 180) % 360;
+  // `in` rather than `??` so an explicit null is passed through, not defaulted.
+  const pick = (options, key, fallback) => key in options ? options[key] : fallback;
+  const summary = (options = {}) => conditionSummary(
+    blacks, pick(options, "period", 16), pick(options, "wind", 4), pick(options, "direction", offshore),
+    pick(options, "tide", 2.5), pick(options, "gust", null), pick(options, "averagePeriod", null),
+  );
+
+  // Spectral width: narrow and broad are named, the middle stays silent.
+  assert.match(summary({ period: 16, averagePeriod: 13 }), /^Clean long-period swell/);
+  assert.match(summary({ period: 16, averagePeriod: 8 }), /^Long-period swell in a mixed sea/);
+  assert.match(summary({ period: 16, averagePeriod: 10.7 }), /^Long-period swell ·/);
+  // Absent Ta the wording is unchanged from before it was available.
+  assert.match(summary({ period: 16 }), /^Long-period swell ·/);
+
+  // Gustiness needs both an unsteady ratio and enough absolute wind to matter.
+  assert.match(summary({ wind: 6, gust: 11 }), /gusty offshore wind/);
+  assert.doesNotMatch(summary({ wind: 1, gust: 5 }), /gusty/, "5 kt gusts on a 1 kt mean leave the water glassy");
+  assert.doesNotMatch(summary({ wind: 9, gust: 10 }), /gusty/, "a steady wind is not gusty however strong");
+  assert.doesNotMatch(summary({ wind: 6 }), /gusty/, "no gust data means no claim");
+
+  // Direction survives the gusty branch rather than being replaced by it.
+  assert.match(summary({ wind: 6, gust: 11, direction: blacks.shoreNormal }), /gusty onshore wind/);
+
+  // Unavailable inputs still say so.
+  assert.match(summary({ wind: null }), /wind forecast unavailable/);
+  assert.match(summary({ tide: null }), /tide forecast unavailable/);
 });

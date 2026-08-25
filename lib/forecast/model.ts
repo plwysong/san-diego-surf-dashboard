@@ -228,10 +228,50 @@ export function forecastConfidence({ nearshore, observation, windObserved, tides
   return { label: rounded >= 78 ? "High" : rounded >= 56 ? "Medium" : "Low", score: rounded, reason: reasons.slice(0, 3).join(" · ") || "regional model estimate" };
 }
 
-export function conditionSummary(profile: Profile, period: number, windSpeed: number | null, windDirection: number | null, tide: number | null) {
-  const periodLabel = period >= 14 ? "Long-period" : period >= 10 ? "Mid-period" : "Short-period";
+/**
+ * Thresholds here describe conditions in words; they are deliberately not in
+ * scoreConditions, which would shift every rating with nothing to validate it
+ * against. This function already classified wind by speed and angle, so these
+ * sit alongside existing judgements rather than introducing a new kind.
+ *
+ * Spectral width Tp/Ta: a narrow swell sits near 1.1-1.3, and a swell buried in
+ * short-period sea runs high. Measured across 320 break-hours the median was
+ * 1.51 and p90 1.90, so only the tails are named and the middle stays silent.
+ *
+ * Gust factor gust/mean: typical over open water is 1.2-1.3. Measured across
+ * 420 daylight hours the median was 1.02 and p75 1.17. Requiring both a factor
+ * of 1.3 and a gust of at least 8 kt fired on 3% of hours, since below 8 kt
+ * even an unsteady wind barely textures the surface.
+ */
+export function conditionSummary(
+  profile: Profile,
+  period: number,
+  windSpeed: number | null,
+  windDirection: number | null,
+  tide: number | null,
+  gust: number | null = null,
+  averagePeriod: number | null = null,
+) {
+  const band = period >= 14 ? "Long-period" : period >= 10 ? "Mid-period" : "Short-period";
+  const width = averagePeriod != null && averagePeriod > 0 && Number.isFinite(period / averagePeriod)
+    ? period / averagePeriod
+    : null;
+  const periodLabel = width == null ? `${band} swell`
+    : width <= 1.3 ? `Clean ${band.toLowerCase()} swell`
+    : width >= 1.8 ? `${band} swell in a mixed sea`
+    : `${band} swell`;
+
   const windDifference = windDirection == null ? null : angularDifference(windDirection, (profile.shoreNormal + 180) % 360);
-  const windLabel = windSpeed == null || windDifference == null ? "wind forecast unavailable" : windDifference <= 55 && windSpeed <= 10 ? "clean offshore wind" : windSpeed <= 5 ? "light wind" : windDifference > 110 ? "onshore wind" : "cross-shore wind";
+  const quarter = windDifference == null ? null : windDifference <= 55 ? "offshore" : windDifference > 110 ? "onshore" : "cross-shore";
+  const gusty = windSpeed != null && gust != null && windSpeed > .5 && gust >= 8 && gust / windSpeed >= 1.3;
+  const windLabel = windSpeed == null || windDifference == null || quarter == null ? "wind forecast unavailable"
+    : gusty ? `gusty ${quarter} wind`
+    : windDifference <= 55 && windSpeed <= 10 ? "clean offshore wind"
+    : windSpeed <= 5 ? "light wind"
+    : quarter === "onshore" ? "onshore wind"
+    : quarter === "offshore" ? "offshore wind"
+    : "cross-shore wind";
+
   const tideLabel = tide == null ? "tide forecast unavailable" : tide >= profile.tideLow && tide <= profile.tideHigh ? "tide in range" : "tide outside ideal range";
-  return `${periodLabel} swell · ${windLabel} · ${tideLabel}`;
+  return `${periodLabel} · ${windLabel} · ${tideLabel}`;
 }
