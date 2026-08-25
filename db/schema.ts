@@ -10,3 +10,17 @@ export const forecastCache = sqliteTable("forecast_cache", {
   lastAttemptAt: integer("last_attempt_at").notNull().default(0),
   lastError: text("last_error"),
 });
+
+/**
+ * One row per successfully built forecast run.
+ *
+ * CDIP publishes no archive of past MOP forecast runs, so a run that is not
+ * stored here cannot be recovered. Buoy-initialised truth for the same hours
+ * stays available from CDIP for years, which makes the prediction side the
+ * perishable half of any later verification.
+ */
+export const forecastHistory = sqliteTable("forecast_history", {
+  issuedAt: integer("issued_at").primaryKey(),
+  mode: text("mode").notNull(),
+  payload: text("payload").notNull(),
+});

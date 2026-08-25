@@ -699,3 +699,62 @@ test("gappy MOP feeds and invalid NDBC values are rejected", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("each built run is archived with the raw values verification needs", async () => {
+  const originalFetch = globalThis.fetch;
+  const row = { payload: null, fetched_at: 0, fresh_until: 0, stale_until: 0, refresh_lock_until: 0, last_error: null };
+  const history = [];
+  const pruned = [];
+  const fakeDb = {
+    prepare(query) {
+      return {
+        values: [],
+        bind(...values) { this.values = values; return this; },
+        async first() { return { ...row }; },
+        async run() {
+          if (query.startsWith("INSERT OR REPLACE INTO forecast_history")) {
+            history.push({ issuedAt: this.values[0], mode: this.values[1], payload: JSON.parse(this.values[2]) });
+          }
+          if (query.startsWith("DELETE FROM forecast_history")) pruned.push(this.values[0]);
+          if (query.startsWith("UPDATE forecast_cache SET refresh_lock_until")) return { meta: { changes: 1 } };
+          return { meta: { changes: 1 } };
+        },
+      };
+    },
+  };
+
+  try {
+    globalThis.fetch = tideScenarioFetch();
+    globalThis.__FORECAST_CACHE_DB__ = fakeDb;
+    const route = await import(`../app/api/conditions/route.ts?history=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+    assert.notEqual(payload.mode, "unavailable");
+
+    assert.equal(history.length, 1, "one archived row per built run");
+    const archived = history[0];
+    assert.equal(archived.mode, payload.mode);
+    assert.ok(Number.isFinite(archived.issuedAt));
+
+    // The archive is only useful if it carries modeled values, not display strings.
+    const blacks = archived.payload.conditions.find((item) => item.name === "Blacks");
+    assert.ok(blacks, "archived run includes breaks");
+    assert.ok(Number.isFinite(blacks.raw.waveHeightM), "modeled height in metres, comparable to CDIP waveHs");
+    assert.ok(Number.isFinite(blacks.raw.periodS));
+    assert.ok(Number.isFinite(blacks.raw.directionDeg));
+    assert.equal(typeof blacks.raw.nearshore, "boolean");
+    assert.match(blacks.raw.mopId, /^D\d{4}$/);
+
+    // Lead time is what makes a sample scoreable, so future days must carry it.
+    const futureDate = Object.keys(archived.payload.dailyConditions).at(-1);
+    const futureSpot = archived.payload.dailyConditions[futureDate].find((item) => item.name === "Blacks");
+    assert.ok(futureSpot.raw.horizonHours > 0, "future days record a forecast horizon");
+    assert.ok(Date.parse(futureSpot.raw.validAt) > 0, "future days record an absolute valid time");
+
+    // Retention prunes strictly older rows, never the run just written.
+    assert.equal(pruned.length, 1);
+    assert.ok(pruned[0] < archived.issuedAt);
+  } finally {
+    delete globalThis.__FORECAST_CACHE_DB__;
+    globalThis.fetch = originalFetch;
+  }
+});

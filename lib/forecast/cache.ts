@@ -9,6 +9,9 @@ const CACHE_KEY = "san-diego-conditions-v11";
 const FRESH_TTL_MS = 60 * 60 * 1000;
 const STALE_TTL_MS = 36 * 60 * 60 * 1000;
 const REFRESH_LEASE_MS = 45 * 1000;
+// Retention for the run archive. At an hourly refresh this is well inside D1's
+// free-tier storage; raise it only after checking the database size.
+const HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 async function durableCacheDb(): Promise<D1DatabaseLike | null> {
   const injected = (globalThis as typeof globalThis & { __FORECAST_CACHE_DB__?: D1DatabaseLike }).__FORECAST_CACHE_DB__;
@@ -33,6 +36,23 @@ async function initializeCache(db: D1DatabaseLike) {
     last_error TEXT
   )`).run();
   await db.prepare("INSERT OR IGNORE INTO forecast_cache (cache_key) VALUES (?)").bind(CACHE_KEY).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS forecast_history (
+    issued_at INTEGER PRIMARY KEY,
+    mode TEXT NOT NULL,
+    payload TEXT NOT NULL
+  )`).run();
+}
+
+/**
+ * Archives one built run. Best-effort: the live forecast must not fail because
+ * the archive did. Past runs are unrecoverable once missed, so this records the
+ * whole payload rather than a trimmed extract.
+ */
+async function recordForecastHistory(db: D1DatabaseLike, payload: ForecastPayload, issuedAt: number) {
+  await db.prepare("INSERT OR REPLACE INTO forecast_history (issued_at, mode, payload) VALUES (?, ?, ?)")
+    .bind(issuedAt, payload.mode, JSON.stringify(payload)).run();
+  await db.prepare("DELETE FROM forecast_history WHERE issued_at < ?")
+    .bind(issuedAt - HISTORY_RETENTION_MS).run();
 }
 
 async function readDurableCache(db: D1DatabaseLike) {
@@ -178,6 +198,8 @@ export function createForecastCache() {
         if (db) {
           try { await storeDurablePayload(db, payload, storedAt); }
           catch (error) { console.error(`[conditions] durable cache write failed: ${error instanceof Error ? error.message : "unknown error"}`); }
+          try { await recordForecastHistory(db, payload, storedAt); }
+          catch (error) { console.error(`[conditions] forecast history write failed: ${error instanceof Error ? error.message : "unknown error"}`); }
         }
         negativeCache = undefined;
         return Response.json(payloadWithCache(payload, "origin", storedAt), { headers: cacheHeaders("REFRESH") });

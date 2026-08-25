@@ -565,6 +565,34 @@ function nearestObservation(profile: Profile, observations: CdipObservation[]) {
   }, null);
 }
 
+/**
+ * The modeled values behind the display strings, captured so a stored run can
+ * later be scored against CDIP truth. The published fields are formatted faces
+ * ("1-2 ft"), which are a different quantity from the measured significant
+ * wave height a buoy-initialised nowcast reports in metres.
+ */
+function rawForecastRecord(
+  profile: Profile,
+  wave: WaveEstimate,
+  localTime: string,
+  windSpeed: number | null,
+  windDirection: number | null,
+  tideFt: number | null,
+) {
+  return {
+    validAt: localForecastTimeToIso(localTime),
+    horizonHours: Math.max(0, Math.round((pseudoLocalMs(localTime) - pseudoLocalMs(localNowKey())) / 3_600_000)),
+    waveHeightM: wave.height,
+    periodS: wave.period,
+    directionDeg: wave.direction,
+    windKt: windSpeed,
+    windDeg: windDirection,
+    tideFt,
+    nearshore: wave.nearshore,
+    mopId: profile.mopId,
+  };
+}
+
 function secondarySwellAt(wave: WaveEstimate) {
   const primary = wave.components[0];
   const component = wave.components.slice(1).find((candidate) => !primary || Math.abs(candidate.period - primary.period) >= 2 || angularDifference(candidate.direction, primary.direction) >= 25)
@@ -859,6 +887,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
     forecastSkill: "Not measured",
     modelPoint: wave.nearshore ? profile.mopId : "Regional fallback",
     summary: conditionSummary(profile, wave.period, windSpeed, windDirection, tide.value),
+    raw: rawForecastRecord(profile, wave, marine.time[index], windSpeed, windDirection, tide.value),
     hourly: chartIndexes.map((hourIndex) => ({
       time: formatHour(marine.time[hourIndex]),
       height: (() => {
@@ -1022,6 +1051,7 @@ async function buildPayload() {
       forecastSkill: "Not measured",
       modelPoint: wave.nearshore ? profile.mopId : "Regional fallback",
       summary: conditionSummary(profile, wave.period, windSpeed, windDirection, tide.value),
+      raw: rawForecastRecord(profile, wave, data.marine.time[index], windSpeed, windDirection, tide.value),
       hourly: buildSpotHourly(profile, data.marine, data.weather, tides, index, mop),
     }];
   });
