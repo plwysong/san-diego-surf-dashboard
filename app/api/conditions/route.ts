@@ -72,7 +72,15 @@ type ProviderStatus = { ok: boolean; detail: string; checkedAt: string; dataTime
 type SpectrumComponent = { period: number; direction: number; heightM: number; energy: number };
 type CdipSpectrum = { observedAt: string; station: string; components: SpectrumComponent[] };
 type CoastalWind = { observedAt: string; station: string; speed: number; direction: number };
-type ZoneForecast = { marine: HourlyData; weather: HourlyData; windLive: boolean; regionalLive: boolean; windSource: "Open-Meteo" | "NWS" | "Unavailable" };
+type ZoneForecast = {
+  marine: HourlyData;
+  weather: HourlyData;
+  windLive: boolean;
+  /** Wind is present and usable, but coverage across the five days has gaps. */
+  windComplete?: boolean;
+  regionalLive: boolean;
+  windSource: "Open-Meteo" | "NWS" | "Unavailable";
+};
 type ForecastBundle = { zones: Map<Zone, ZoneForecast>; spotWinds: Map<string, HourlyData>; daylight: DaylightByDate };
 
 export function displayedDayIndexes(times: string[], start: number) {
@@ -126,9 +134,16 @@ function alignWeatherToMarine(marineTimes: string[], weather: HourlyData) {
   const days = current < 0 ? [] : displayedDayIndexes(marineTimes, current);
   const coherent = (index: number) => typeof windSpeed[index] === "number" && Number.isFinite(windSpeed[index])
     && typeof windDirection[index] === "number" && Number.isFinite(windDirection[index]);
-  const usable = current >= 0 && coherent(current) && days.length === 5
-    && days.every(([, indexes]) => indexes.filter(coherent).length >= indexes.length * .8);
-  return { usable, hourly: { time: marineTimes, wind_speed_10m: windSpeed, wind_direction_10m: windDirection, wind_gusts_10m: gusts } satisfies HourlyData };
+  // Two different questions were conflated here. Whether the series is worth
+  // using at all depends on the current hour and the days being present.
+  // Whether coverage is *complete* is a separate matter that belongs in
+  // provider status, not in a decision to discard the whole series: a single
+  // thin day used to erase wind for every break on every day, which is exactly
+  // the failure isolation this project requires. Missing hours are already
+  // null and already render as unavailable.
+  const usable = current >= 0 && coherent(current) && days.length === 5;
+  const complete = usable && days.every(([, indexes]) => indexes.filter(coherent).length >= indexes.length * .8);
+  return { usable, complete, hourly: { time: marineTimes, wind_speed_10m: windSpeed, wind_direction_10m: windDirection, wind_gusts_10m: gusts } satisfies HourlyData };
 }
 
 function localNowKey() {
@@ -293,6 +308,7 @@ function formatWind(speed: number | null, direction: number | null, gust: number
   if (speed == null || direction == null) return "Forecast unavailable";
   const mean = Math.round(speed);
   const gusting = gust == null ? null : Math.round(gust);
+  if (mean === 0) return gusting != null && gusting > 0 ? `Calm · gusts ${gusting}` : "Calm";
   return gusting != null && gusting > mean
     ? `${mean} kt ${cardinal(direction)} · gusts ${gusting}`
     : `${mean} kt ${cardinal(direction)}`;
@@ -748,8 +764,16 @@ async function fetchNwsWind(zone: Zone) {
   const forecast = await fetchJson<{ properties?: { periods?: Array<{ startTime: string; windSpeed: string; windDirection: string }> } }>(`NWS ${zone} wind`, forecastUrl);
   const rows = (forecast.properties?.periods ?? []).flatMap((period) => {
     const speed = parseNwsWindSpeed(period.windSpeed);
-    const direction = windDirectionDegrees[period.windDirection];
-    if (speed == null || direction == null) return [];
+    if (speed == null) return [];
+    // NWS omits the direction when the wind is calm, because calm has no
+    // direction. Observed here only ever at 0 mph. Dropping those hours threw
+    // away the best possible wind for surfing and punched holes in the series
+    // that then failed the coverage check. Calm is encoded as 000 by the same
+    // convention METAR uses; formatWind renders it as "Calm" so no direction
+    // is ever shown for it.
+    const named = windDirectionDegrees[period.windDirection];
+    const direction = named ?? (speed < .5 ? 0 : null);
+    if (direction == null) return [];
     return [{ time: localKeyFromUtc(new Date(period.startTime).toISOString()), speed, direction }];
   });
   if (rows.length < 24) throw new Error(`NWS ${zone}: insufficient hourly wind`);
@@ -809,6 +833,7 @@ async function fetchZones() {
       marine,
       weather: windLive ? alignedWeather!.hourly : { time: marine.time },
       windLive,
+      windComplete: Boolean(alignedWeather?.complete),
       regionalLive: true,
       windSource: windLive ? "Open-Meteo" : "Unavailable",
     });
@@ -1158,7 +1183,7 @@ async function buildPayload() {
       const windResolved: ZoneForecast = regional.windLive
         ? regional
         : nwsAligned?.usable
-          ? { ...regional, weather: nwsAligned.hourly, windLive: true, windSource: "NWS" }
+          ? { ...regional, weather: nwsAligned.hourly, windLive: true, windSource: "NWS", windComplete: nwsAligned.complete }
           : regional;
       zoneData.set(zone, windResolved);
       return;
@@ -1168,8 +1193,8 @@ async function buildPayload() {
     if (mop?.time.length) {
       const nwsAligned = nwsWindResult.value.get(zone) ? alignWeatherToMarine(mop.time, nwsWindResult.value.get(zone)!) : null;
       const fallback: ZoneForecast = nwsAligned?.usable
-        ? { marine: mop, weather: nwsAligned.hourly, windLive: true, regionalLive: false, windSource: "NWS" }
-        : { marine: mop, weather: { time: mop.time }, windLive: false, regionalLive: false, windSource: "Unavailable" };
+        ? { marine: mop, weather: nwsAligned.hourly, windLive: true, windComplete: nwsAligned.complete, regionalLive: false, windSource: "NWS" }
+        : { marine: mop, weather: { time: mop.time }, windLive: false, windComplete: false, regionalLive: false, windSource: "Unavailable" };
       zoneData.set(zone, fallback);
     }
   });
@@ -1181,7 +1206,7 @@ async function buildPayload() {
       const spotWeather = regionalForecastResult.value.spotWinds.get(profile.name);
       const alignedSpotWeather = spotWeather ? alignWeatherToMarine(zone.marine.time, spotWeather) : null;
       const resolved = alignedSpotWeather?.usable
-        ? { ...zone, weather: alignedSpotWeather.hourly, windLive: true, windSource: "Open-Meteo" as const }
+        ? { ...zone, weather: alignedSpotWeather.hourly, windLive: true, windComplete: alignedSpotWeather.complete, windSource: "Open-Meteo" as const }
         : zone;
       return windObservationResult.value && resolved.windLive
         ? { ...resolved, weather: correctWindForecast(resolved.weather, windObservationResult.value, profile.zone) }
@@ -1199,6 +1224,7 @@ async function buildPayload() {
         ? correctWindForecast(alignedWeather, windObservationResult.value, profile.zone)
         : alignedWeather,
       windLive: Boolean(aligned?.usable),
+      windComplete: Boolean(aligned?.complete),
       windSource: aligned?.usable ? "NWS" as const : "Unavailable" as const,
     };
   };
@@ -1315,7 +1341,8 @@ async function buildPayload() {
     return data ? [{ profile, data }] : [];
   });
   const windLiveCount = resolvedSpotData.filter(({ data }) => data.windLive).length;
-  const allWindLive = windLiveCount === profiles.length;
+  const windCompleteCount = resolvedSpotData.filter(({ data }) => data.windComplete).length;
+  const allWindLive = windCompleteCount === profiles.length;
   const spotScaleWindCount = regionalForecastResult.value.spotWinds.size;
   const mopLiveCount = mopBySpot.size;
   const mopSpectralCount = [...mopBySpot.values()].filter((value) => value.spectral_components?.some((components) => components.length > 1)).length;
@@ -1341,7 +1368,7 @@ async function buildPayload() {
     cdip: { ok: cdipResult.ok, detail: cdipResult.ok ? `${cdipResult.value.length} fresh San Diego-area buoy observations` : "Nearshore observation feed unavailable", checkedAt: generatedAt, dataTimestamp: cdipResult.value[0]?.observedAt },
     spectra: { ok: mopSpectralCount > 0, detail: `${mopSpectralCount}/${mopLiveCount || profiles.length} live MOP points include long-, mid-, and short-period forecast energy${spectrumResult.ok ? "; Torrey Pines Outer spectrum is available for monitoring only" : ""}`, checkedAt: generatedAt, dataTimestamp: spectrumResult.value?.observedAt },
     marine: { ok: regionalMarineLiveCount === 3, detail: `${regionalMarineLiveCount}/3 regional forecast zones have complete five-day wave coverage; ${regionalSecondaryCount}/${regionalMarineLiveCount || 3} include coherent secondary-swell components${regionalMarineLiveCount === 3 ? "" : `; CDIP nearshore forecasts cover ${liveZones}/3 zones`}`, checkedAt: generatedAt, validThrough: marineValidThrough },
-    wind: { ok: allWindLive && completeCurrentWindCoverage, detail: `${windLiveCount}/${profiles.length} break forecasts have wind · ${spotScaleWindCount}/${profiles.length} use spot-scale Open-Meteo guidance · ${zones.map((zone) => `${zone}: ${zoneData.get(zone)?.windSource ?? "Unavailable"}`).join("; ")}; remaining healthy breaks use isolated zone or NWS fallback${allWindLive && completeCurrentWindCoverage ? "" : "; missing wind is shown as unavailable, never fabricated"}`, checkedAt: generatedAt, validThrough: windValidThrough },
+    wind: { ok: allWindLive && completeCurrentWindCoverage, detail: `${windLiveCount}/${profiles.length} break forecasts have wind${windCompleteCount < windLiveCount ? `, ${windCompleteCount} with gap-free five-day coverage` : ""} · ${spotScaleWindCount}/${profiles.length} use spot-scale Open-Meteo guidance · ${zones.map((zone) => `${zone}: ${zoneData.get(zone)?.windSource ?? "Unavailable"}`).join("; ")}; remaining healthy breaks use isolated zone or NWS fallback${allWindLive && completeCurrentWindCoverage ? "" : "; missing wind is shown as unavailable, never fabricated"}`, checkedAt: generatedAt, validThrough: windValidThrough },
     windObservation: { ok: centralWindAdjusted, detail: centralWindAdjusted ? "La Jolla observation adjusts Central County wind only, with time decay" : "Using uncorrected forecast wind", checkedAt: generatedAt, dataTimestamp: windObservationResult.value?.observedAt },
     waterLevel: {
       ok: laJollaResidualResult.ok || sanDiegoResidualResult.ok,

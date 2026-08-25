@@ -656,7 +656,7 @@ test("null forecast tails and malformed timelines cannot claim five-day coverage
   }
 });
 
-test("wind tail gaps remain unavailable on future days", async () => {
+test("a wind tail gap blanks only the days past it, not the whole forecast", async () => {
   const originalFetch = globalThis.fetch;
   const baseFetch = tideScenarioFetch();
   try {
@@ -675,7 +675,15 @@ test("wind tail gaps remain unavailable on future days", async () => {
     const payload = await (await route.GET()).json();
     assert.equal(payload.mode, "partial");
     assert.equal(payload.providers.wind.ok, false);
-    assert.ok(Object.values(payload.dailyConditions).slice(2).every((day) => day.every((spot) => spot.wind === "Forecast unavailable")));
+      // The gap begins part-way through the third displayed day, so that day keeps
+      // the wind it has while days entirely past the gap have none. Requiring the
+      // third day to be blank too would mean discarding real data, which is what
+      // this used to do when one thin day failed the coverage check.
+      const displayed = Object.values(payload.dailyConditions);
+      assert.ok(displayed.slice(3).every((day) => day.every((spot) => spot.wind === "Forecast unavailable")),
+        "days wholly past the gap must report wind as unavailable");
+      assert.ok(displayed.slice(0, 3).some((day) => day.some((spot) => spot.wind !== "Forecast unavailable")),
+        "days before the gap must keep the wind they have; a thin tail must not erase them");
   } finally {
     globalThis.fetch = originalFetch;
   }
