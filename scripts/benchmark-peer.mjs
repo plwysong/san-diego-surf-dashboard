@@ -153,29 +153,61 @@ async function truthFor(mopId, validAt) {
 const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 
 function report(rows) {
-  const ratios = rows.map((row) => row.ratio);
-  const average = mean(ratios);
-  const spread = ratios.length > 1
-    ? Math.sqrt(mean(ratios.map((value) => (value - average) ** 2)))
-    : null;
+  // Feet first. A ratio misleads at small surf: one band apart is 0.71x one way
+  // and 1.40x the other, so ratio scatter looks alarming when the absolute
+  // difference is a single foot.
+  const diffs = rows.map((row) => row.oursMid - row.theirMid);
+  const bias = mean(diffs);
+  const scatter = diffs.length > 1 ? Math.sqrt(mean(diffs.map((value) => (value - bias) ** 2))) : null;
 
   console.log(`\n${rows.length} samples\n`);
-  console.log("date        break             ours     peer      ratio   CDIP truth");
+  console.log("date        break             ours     peer      diff    CDIP truth");
   console.log("-".repeat(74));
   for (const row of rows) {
-    const truth = row.truthFt == null ? "     —" : `${row.truthFt.toFixed(1).padStart(5)} ft`;
-    console.log(`${row.recordedAt.slice(0, 10)}  ${row.spot.padEnd(17)} ${`${row.oursLow}-${row.oursHigh}`.padStart(6)}  ${`${row.theirLow}-${row.theirHigh}`.padStart(6)}   ${row.ratio.toFixed(2).padStart(6)}   ${truth}`);
+    const truth = row.truthFt == null ? "     \u2014" : `${row.truthFt.toFixed(1).padStart(5)} ft`;
+    const diff = row.oursMid - row.theirMid;
+    console.log(`${row.recordedAt.slice(0, 10)}  ${row.spot.padEnd(17)} ${`${row.oursLow}-${row.oursHigh}`.padStart(6)}  ${`${row.theirLow}-${row.theirHigh}`.padStart(6)}  ${((diff >= 0 ? "+" : "") + diff.toFixed(1)).padStart(6)}   ${truth}`);
   }
 
-  console.log(`\nours / peer: mean ${average.toFixed(2)}${spread == null ? "" : `, standard deviation ${spread.toFixed(2)}`}`);
-  if (spread == null) {
-    console.log("A single sample says nothing. Consistency is the signal, so collect more.");
-  } else if (spread <= 0.2) {
-    console.log(average >= 0.85 && average <= 1.18
-      ? "Consistent and close: no evidence of a calibration problem."
-      : `Consistent offset of about ${average.toFixed(2)}x. That reads as a height-convention difference rather than a defect, and it is correctable with one constant if you want to match.`);
+  const within = diffs.filter((value) => Math.abs(value) < 1).length;
+  console.log(`\nours minus peer: mean ${bias >= 0 ? "+" : ""}${bias.toFixed(2)} ft${scatter == null ? "" : `, spread ${scatter.toFixed(2)} ft`}`);
+  console.log(`ratio ours/peer: ${mean(rows.map((row) => row.ratio)).toFixed(2)}x`);
+  console.log(`within one band: ${within}/${diffs.length}`);
+
+  // Bias and scatter are different questions, and only bias justifies a
+  // constant. Half a band for bias, one band for scatter, since the published
+  // bands are about a foot wide at the sizes seen here.
+  if (scatter == null) {
+    console.log("\nOne sample cannot separate a real difference from a single odd reading. Collect more.");
   } else {
-    console.log("Inconsistent: the ratio moves too much between samples to be a convention difference. That points at the face translation, not at a scale offset.");
+    const biased = Math.abs(bias) > .5;
+    const noisy = scatter > 1;
+    if (!biased && !noisy) {
+      console.log("\nNo systematic difference, and scatter inside one band. Nothing here indicates a calibration problem.");
+    } else if (biased && !noisy) {
+      console.log(`\nSystematic offset of ${bias >= 0 ? "+" : ""}${bias.toFixed(2)} ft with tight scatter. A consistent offset is a convention or calibration difference, and one constant would correct it.`);
+    } else if (!biased && noisy) {
+      console.log("\nNo systematic offset, but individual breaks differ by more than a band. The average is fine; the per-break picture is where to look. A break off in the same direction across several readings is the thing worth acting on.");
+    } else {
+      console.log(`\nBoth a systematic offset of ${bias >= 0 ? "+" : ""}${bias.toFixed(2)} ft and scatter beyond one band. Correct the offset first, then re-measure before judging individual breaks.`);
+    }
+  }
+
+  // Repeat readings are the only basis for changing a single break.
+  const byBreak = new Map();
+  for (const row of rows) byBreak.set(row.spot, [...(byBreak.get(row.spot) ?? []), row.oursMid - row.theirMid]);
+  const repeated = [...byBreak].filter(([, values]) => values.length > 1);
+  if (!repeated.length) {
+    console.log("\nEvery break has a single reading: enough to rule out a systematic problem, not enough to change any individual break.");
+  } else {
+    const consistent = repeated.filter(([, values]) => Math.abs(mean(values)) >= 1 && values.every((value) => Math.sign(value) === Math.sign(values[0])));
+    console.log(`\n${repeated.length} break${repeated.length === 1 ? " has" : "s have"} more than one reading.`);
+    if (consistent.length) {
+      console.log("Off in the same direction every time, which is what would justify a constant change:");
+      consistent.forEach(([spot, values]) => console.log(`  ${spot.padEnd(17)} ${values.length} readings, mean ${mean(values) >= 0 ? "+" : ""}${mean(values).toFixed(1)} ft`));
+    } else {
+      console.log("None is off in the same direction every time, so none warrants a constant change yet.");
+    }
   }
 
   const untimed = rows.filter((row) => !row.validAt).length;
@@ -183,12 +215,13 @@ function report(rows) {
 
   const withTruth = rows.filter((row) => row.truthFt != null);
   if (withTruth.length >= 3) {
-    const oursVsTruth = mean(withTruth.map((row) => ((row.oursLow + row.oursHigh) / 2) / (row.truthFt * M_TO_FT)));
-    const peerVsTruth = mean(withTruth.map((row) => ((row.theirLow + row.theirHigh) / 2) / (row.truthFt * M_TO_FT)));
+    const oursVsTruth = mean(withTruth.map((row) => row.oursMid / (row.truthFt * M_TO_FT)));
+    const peerVsTruth = mean(withTruth.map((row) => row.theirMid / (row.truthFt * M_TO_FT)));
     console.log(`\nAgainst buoy-initialised nowcast Hs (${withTruth.length} samples):`);
     console.log(`  ours ${oursVsTruth.toFixed(2)}x Hs, peer ${peerVsTruth.toFixed(2)}x Hs`);
-    console.log("  Both are face estimates from the same physical sea, so this shows which conversion is more aggressive.");
-    console.log("  Neither is truth. Hs is a different quantity from a breaking face and is shown for scale only.");
+    console.log("  This is the check that does not depend on the peer being right, because it");
+    console.log("  compares both conversions to a measured sea. Neither is truth, and Hs is a");
+    console.log("  different quantity from a breaking face, so read it as a scale comparison.");
   }
   console.log("\nPeers are an external model comparison, never an observation.");
 }
@@ -207,6 +240,8 @@ if (command === "add") {
     for (const sample of samples) {
       rows.push({
         ...sample,
+        oursMid: (sample.oursLow + sample.oursHigh) / 2,
+        theirMid: (sample.theirLow + sample.theirHigh) / 2,
         ratio: ((sample.oursLow + sample.oursHigh) / 2) / Math.max(.25, (sample.theirLow + sample.theirHigh) / 2),
         truthFt: await truthFor(sample.mopId, sample.validAt),
       });
