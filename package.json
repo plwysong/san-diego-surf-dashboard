@@ -16,7 +16,9 @@
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
-    "verify:skill": "node --experimental-strip-types scripts/verify-forecast-skill.mjs"
+    "verify:skill": "node --experimental-strip-types scripts/verify-forecast-skill.mjs",
+    "benchmark:add": "node --experimental-strip-types scripts/benchmark-peer.mjs add",
+    "benchmark:report": "node --experimental-strip-types scripts/benchmark-peer.mjs report"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

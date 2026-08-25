@@ -39,11 +39,22 @@ The dashboard's headline output is a breaking-wave face range at a named break. 
 
 So the verifiable chain stops one step short of the published number. Swell height, period, direction, wind, and tide can all be scored automatically. The final translation into faces cannot, and remains a calibration judgement.
 
-## Truth labelling
+## Truth labelling, and what peer comparison is for
 
-Do not treat another provider's *forecast* as an observation. Surfline's LOTUS output and non-observed spot cards remain external model comparisons.
+Two different things get confused here, and the distinction is only about labelling.
 
-The MOP nowcast and hindcast are a permitted verification reference, because they are driven by buoy measurements rather than modelled winds. They are still model output. Any published result must say it was verified against a buoy-initialised reconstruction, never against an observation. Source confidence must never be presented as accuracy.
+**Nothing may be presented as an observation unless it was measured.** The MOP nowcast and hindcast are the permitted verification reference because they propagate buoy measurements rather than modelled winds, but they remain model output. Any published skill figure must say it was verified against a buoy-initialised reconstruction. Source confidence must never be presented as accuracy.
+
+**Comparing against other forecasters is legitimate and encouraged.** It is ordinary practice, and it answers a question nothing else can: whether this forecast is an outlier. Surfline and its peers are not ground truth and must never be scored as such, but a periodic comparison against them is a real check and should be treated as one.
+
+This matters most for the breaking-face translation, which no instrument measures. Peer comparison is the *only* available check on that step, so an over-cautious reading of this rule removes the last means of catching a badly calibrated break.
+
+Two things make such a comparison sound:
+
+- **Look for consistency, not agreement.** Height conventions differ between services, so a steady ratio is a convention offset and harmless. A ratio that swings between half and double is a real defect. This is the same reasoning that rescued the regional skill analysis from a fixed grid-point offset.
+- **Include truth as a third leg where it exists.** The input chain is measured accurate, so if this forecast and a peer both see the same swell yet report different faces, the difference isolates the translation rather than the inputs.
+
+Surfline publishes no public API and licenses its content for personal use, so comparison is recorded by hand rather than fetched. `scripts/benchmark-peer.mjs` keeps the manual effort to a single number per entry.
 
 ## Measured skill, regional wave input
 
