@@ -66,7 +66,7 @@ const zoneDefaults: Record<Zone, string> = {
   "South Bay": "Coronado",
 };
 
-type HourlyPoint = { time: string; height: number; wind: number | null; score: number };
+type HourlyPoint = { time: string; height: number; wind: number | null; gust?: number | null; score: number };
 type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[]; dayHeight?: string; daySets?: string; dayPeak?: string; daySource?: string };
 type ZoneSeries = Record<string, {
   hourly?: HourlyPoint[];
@@ -143,22 +143,57 @@ function Logo() {
   );
 }
 
-function QualityTrend({ hours, future = false }: { hours: Array<{ time: string; score: number }>; future?: boolean }) {
+function QualityTrend({ hours, future = false }: { hours: HourlyPoint[]; future?: boolean }) {
   if (!hours.length) return <p className="forecast-unavailable">Regional forecast temporarily unavailable.</p>;
   const width = 600;
   const baseline = 82;
   const top = 15;
+  const x = (index: number) => hours.length === 1 ? width / 2 : 12 + index * ((width - 24) / (hours.length - 1));
   const points = hours.map((hour, index) => ({
     ...hour,
-    x: hours.length === 1 ? width / 2 : 12 + index * ((width - 24) / (hours.length - 1)),
+    x: x(index),
     y: baseline - (Math.max(0, Math.min(100, hour.score)) / 100) * (baseline - top),
   }));
   const line = points.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" ");
   const area = `${line} L ${points.at(-1)?.x ?? width - 12} ${baseline} L ${points[0].x} ${baseline} Z`;
   const peak = points.reduce((best, point) => point.score > best.score ? point : best, points[0]);
 
+  // Wind keeps its own scale, anchored so a light morning does not look dramatic.
+  // 20 kt is already unsurfable at most breaks, so it makes a fair ceiling.
+  const windValues = hours.flatMap((hour) => [hour.wind, hour.gust].filter((value): value is number => value != null));
+  const windTop = Math.max(20, Math.ceil(Math.max(0, ...windValues)));
+  const windY = (value: number) => baseline - (Math.max(0, Math.min(windTop, value)) / windTop) * (baseline - top);
+
+  // Gaps are breaks in the line, never interpolated across missing hours.
+  const segments = (pick: (hour: HourlyPoint) => number | null | undefined) =>
+    hours.reduce<Array<Array<{ x: number; y: number }>>>((runs, hour, index) => {
+      const value = pick(hour);
+      if (value == null) return [...runs, []];
+      const last = runs.at(-1)!;
+      last.push({ x: x(index), y: windY(value) });
+      return runs;
+    }, [[]]).filter((run) => run.length > 1)
+      .map((run) => run.map((point, index) => `${index ? "L" : "M"} ${point.x} ${point.y}`).join(" "));
+
+  const windPaths = segments((hour) => hour.wind);
+  const gustBands = hours.reduce<Array<Array<{ x: number; wind: number; gust: number }>>>((runs, hour, index) => {
+    if (hour.wind == null || hour.gust == null || hour.gust <= hour.wind) return [...runs, []];
+    runs.at(-1)!.push({ x: x(index), wind: hour.wind, gust: hour.gust });
+    return runs;
+  }, [[]]).filter((run) => run.length > 1).map((run) => {
+    const up = run.map((point, index) => `${index ? "L" : "M"} ${point.x} ${windY(point.gust)}`).join(" ");
+    const back = [...run].reverse().map((point) => `L ${point.x} ${windY(point.wind)}`).join(" ");
+    return `${up} ${back} Z`;
+  });
+
+  const peakGust = Math.max(0, ...hours.map((hour) => hour.gust ?? 0));
+  const peakWind = Math.max(0, ...hours.map((hour) => hour.wind ?? 0));
+  const windLabel = windValues.length
+    ? `wind to ${peakWind} kt${peakGust > peakWind ? `, gusts ${peakGust}` : ""}`
+    : "wind unavailable";
+
   return (
-    <div className="quality-trend" role="img" aria-label={`${future ? "Daylight" : "Next six hours"} quality trend, peaking at ${peak.score} out of 100 around ${peak.time}`}>
+    <div className="quality-trend" role="img" aria-label={`${future ? "Daylight" : "Next six hours"} quality trend, peaking at ${peak.score} out of 100 around ${peak.time}. Wind ${windValues.length ? `reaches ${peakWind} knots${peakGust > peakWind ? ` with gusts to ${peakGust} knots` : ""}` : "is unavailable"}.`}>
       <div className="trend-heading">
         <span><small>{future ? "Daylight outlook" : "Next 6 hours"}</small><b>Quality trend</b></span>
         <strong>Peak {peak.score} <i>·</i> {peak.time}</strong>
@@ -177,10 +212,16 @@ function QualityTrend({ hours, future = false }: { hours: Array<{ time: string; 
         </defs>
         <path className="trend-grid" d={`M 12 32 H ${width - 12} M 12 57 H ${width - 12} M 12 ${baseline} H ${width - 12}`} />
         <path className="trend-area" d={area} />
+        {gustBands.map((band, index) => <path key={`gust-${index}`} className="trend-gust" d={band} />)}
+        {windPaths.map((path, index) => <path key={`wind-${index}`} className="trend-wind" d={path} />)}
         <path className="trend-line" d={line} />
-        {points.map((point, index) => <circle key={`${point.time}-${index}`} className={point === peak ? "peak" : index === 0 ? "now" : ""} cx={point.x} cy={point.y} r={point === peak ? 5 : index === 0 ? 4 : 2.5}><title>{point.time}: {point.score}/100</title></circle>)}
+        {points.map((point, index) => <circle key={`${point.time}-${index}`} className={point === peak ? "peak" : index === 0 ? "now" : ""} cx={point.x} cy={point.y} r={point === peak ? 5 : index === 0 ? 4 : 2.5}><title>{point.time}: {point.score}/100{point.wind == null ? "" : ` · ${point.wind} kt${point.gust != null && point.gust > point.wind ? ` gusting ${point.gust}` : ""}`}</title></circle>)}
       </svg>
-      <div className="trend-axis"><span>{future ? hours[0].time : `Now · ${hours[0].time}`}</span><span>{hours[Math.floor(hours.length / 2)]?.time}</span><span>{hours.at(-1)?.time}</span></div>
+      <div className="trend-axis">
+        <span>{future ? hours[0].time : `Now · ${hours[0].time}`}</span>
+        <span className="trend-wind-key">{windLabel}</span>
+        <span>{hours.at(-1)?.time}</span>
+      </div>
     </div>
   );
 }

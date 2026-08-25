@@ -258,6 +258,7 @@ function buildSpotHourly(profile: Profile, marine: HourlyData, weather: HourlyDa
       time: formatHour(marine.time[index]),
       height: face.faceFeet,
       wind: wind == null ? null : Math.round(wind),
+      gust: (() => { const value = weather.wind_gusts_10m?.[index]; return value == null ? null : Math.round(value); })(),
       score: scoreConditions(profile, wave.period, wind, windDirection, tide, face.faceFeet),
     }];
   });
