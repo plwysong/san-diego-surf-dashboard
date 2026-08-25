@@ -21,8 +21,11 @@ Maintain an accurate, resilient, and honest San Diego surf forecast. Never prese
 - Confidence must reflect freshness, forecast horizon, source availability, and agreement.
 - Confidence is not accuracy. Do not present source confidence as forecast skill, or vice versa.
 - CDIP MOP nowcast and hindcast are the permitted verification reference because they are
-  buoy-initialised, but they remain model output. Never label them an observation. See
-  `docs/forecast-verification.md` before changing anything about verification.
+  buoy-initialised, but they remain model output. Never label them an observation.
+- Comparing against other forecasters is allowed and useful, and is the only available check
+  on the breaking-face translation. They are never ground truth and are never scored as such,
+  but do not read the rule above as a ban on comparison. It has been misread that way before.
+- See `docs/forecast-verification.md` before changing anything about verification.
 
 ## Validation
 
@@ -30,6 +33,7 @@ Run the narrowest relevant test while iterating, then before handoff run:
 
 ```bash
 npm run lint
+npm run typecheck
 npm test
 ```
 

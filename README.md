@@ -24,10 +24,13 @@ Then open the local URL printed by Vite.
 
 ```bash
 npm run lint
+npm run typecheck
 npm test
 ```
 
-`npm test` builds the production artifact and runs the forecast regression suite. The build helpers use Bash and GNU `timeout`; on macOS, run development directly or use a Linux environment for the complete production validation path.
+`npm test` builds the production artifact and runs the forecast regression suite. `npm run test:unit` skips the build and runs only the source-level tests, which is faster while iterating.
+
+The build helpers prefer GNU `timeout` and fall back to `gtimeout` or an unbounded run, so the full validation path works on macOS as well as the Linux image.
 
 ## Project map
 
@@ -40,6 +43,9 @@ npm test
 - `tests/` — provider-failure and forecast-engine regression tests
 - `docs/forecast-verification.md` — what can be verified, measured skill, and evaluation rules
 - `docs/data-source-options.md` — free and paid data sources that could improve the forecast model
+- `scripts/verify-forecast-skill.mjs` — scores archived forecasts against CDIP truth (`npm run verify:skill`)
+- `scripts/benchmark-peer.mjs` — records and reports comparisons against other forecasters (`npm run benchmark:add`, `npm run benchmark:report`)
+- `benchmarks/` — the peer comparison log
 - `.openai/hosting.json` — current ChatGPT Sites deployment configuration
 - `AGENTS.md` — working conventions for Codex and other coding agents
 
