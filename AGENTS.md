@@ -14,7 +14,10 @@ Maintain an accurate, resilient, and honest San Diego surf forecast. Never prese
 
 - Keep swell height, direction, period, and timestamp from a coherent component/time rather than mixing daily extrema.
 - Preserve multiple swell components and period-aware breaking response.
-- Keep typical modeled faces distinct from larger sets.
+- Publish the set-wave band as the surf height and keep the typical band as a separate,
+  smaller figure. Measured against Surfline across nine breaks, the set band matched to
+  0.11 ft while the typical band ran 1.11 ft low. Leading with the typical band made a
+  correct forecast read as an under-call.
 - Never invent wind, tide, buoy, or wave values when a provider fails.
 - Isolate provider and spot failures; one failure must not erase healthy regions or breaks.
 - Label retained real data as cached/stale, never as current live data.

@@ -13,7 +13,7 @@ type Spot = {
   name: string;
   zone: Zone;
   height: string;
-  sets?: string;
+  typical?: string;
   rating: Rating;
   swell: string;
   period: string;
@@ -67,10 +67,10 @@ const zoneDefaults: Record<Zone, string> = {
 };
 
 type HourlyPoint = { time: string; height: number; wind: number | null; gust?: number | null; score: number };
-type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[]; dayHeight?: string; daySets?: string; dayPeak?: string; daySource?: string };
+type DailyCondition = Partial<Spot> & { name: string; hourly?: HourlyPoint[]; dayHeight?: string; dayTypical?: string; dayPeak?: string; daySource?: string };
 type ZoneSeries = Record<string, {
   hourly?: HourlyPoint[];
-  days?: Array<{ dateKey: string; day: string; date: string; height: string; sets?: string; dayPeak?: string; daySource?: string; rating: Rating; period: string }>;
+  days?: Array<{ dateKey: string; day: string; date: string; height: string; typical?: string; dayPeak?: string; daySource?: string; rating: Rating; period: string }>;
 }>;
 
 type ConditionsPayload = {
@@ -99,6 +99,7 @@ function unavailableSpot(spot: SpotDefinition): Spot {
     best: "Data unavailable",
     score: 0,
     swellDegrees: null,
+    typical: "—",
     secondarySwell: "—",
     confidence: "Low",
     confidenceScore: 0,
@@ -316,12 +317,12 @@ export default function Home() {
     return forecast ? {
       ...day,
       height: forecast.dayHeight ?? forecast.height ?? day.height,
-      sets: forecast.daySets ?? forecast.sets ?? day.sets,
+      typical: forecast.dayTypical ?? forecast.typical ?? day.typical,
       dayPeak: forecast.dayPeak ?? day.dayPeak,
       daySource: forecast.daySource ?? day.daySource,
       rating: forecast.rating ?? day.rating,
       period: forecast.period ?? day.period,
-    } : { ...day, height: "—", sets: undefined, rating: "Unavailable" as const, period: "—" };
+    } : { ...day, height: "—", typical: undefined, rating: "Unavailable" as const, period: "—" };
   });
   const activeDateKey = selectedDateKey ?? days[0]?.dateKey ?? null;
   const isFuture = isFutureForecastDate(activeDateKey);
@@ -408,7 +409,7 @@ export default function Home() {
           <section className="forecast-strip" aria-label={`${selectedName} five-day forecast`}>
             <div className="forecast-strip-heading">
               <b>{selectedName} · 5-day forecast</b>
-              <span>Daytime peak + larger sets · select a day</span>
+              <span>Daytime peak surf · select a day</span>
             </div>
             <div className="day-grid">
               {days.map((day) => (
@@ -417,12 +418,12 @@ export default function Home() {
                   className={`day-card ${day.dateKey === activeDateKey ? "selected" : ""}`}
                   onClick={() => setSelectedDateKey(day.dateKey)}
                   aria-pressed={day.dateKey === activeDateKey}
-                  aria-label={`${day.day}, ${day.date}: daytime peak ${day.height}${day.sets ? `, larger sets ${day.sets}` : ""}, ${day.period} period, ${day.rating}`}
+                  aria-label={`${day.day}, ${day.date}: daytime peak surf ${day.height}${day.typical ? `, typical waves ${day.typical}` : ""}, ${day.period} period, ${day.rating}`}
                   title={`${day.dayPeak ? `Peak around ${day.dayPeak} · ` : ""}${day.daySource ? `${day.daySource} · ` : ""}${day.period} period · ${day.rating}`}
                 >
                   <span><b>{day.day}</b><small>{day.date}</small></span>
                   <strong>{displayHeight(day.height)}</strong>
-                  {day.sets && <small className="day-sets">sets {displayHeight(day.sets)}</small>}
+                  {day.typical && <small className="day-sets">typical {displayHeight(day.typical)}</small>}
                   <i className={day.rating.toLowerCase()} aria-hidden="true" />
                 </button>
               ))}
@@ -451,7 +452,7 @@ export default function Home() {
 
             <div className="wave-reading">
               <strong>{displayHeight(selected.height)}</strong>
-              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : isFuture ? "At the best window" : "Now · typical modeled faces"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.sets ? `Larger sets ${displayHeight(selected.sets)}` : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
+              <span><b>{selected.rating === "Unavailable" ? "Awaiting forecast" : isFuture ? "Surf at the best window" : "Now · surf height"}</b><small>{selected.rating === "Unavailable" ? "This zone is temporarily offline" : selected.typical ? `Typical waves ${displayHeight(selected.typical)}` : selected.modelPoint?.startsWith("D") ? `CDIP ${selected.modelPoint} + break response` : "regional fallback estimate"}</small></span>
             </div>
 
             <div className="metrics-grid">
@@ -479,7 +480,7 @@ export default function Home() {
                 <button key={spot.name} className={spot.name === selected.name ? "current" : ""} aria-current={spot.name === selected.name ? "true" : undefined} onClick={() => focusSpot(spot)} title={`${spot.confidence ?? "Low"} data confidence${spot.confidenceReason ? ` · ${spot.confidenceReason}` : ""}`}>
                   <span className={`quality-dot ${spot.rating.toLowerCase()}`} />
                   <span className="list-name"><b>{spot.name}</b><small>{spot.swell} · {spot.period}</small></span>
-                  <strong>{displayHeight(spot.height)}{spot.sets && <small>sets {displayHeight(spot.sets)}</small>}</strong>
+                  <strong>{displayHeight(spot.height)}{spot.typical && <small>typical {displayHeight(spot.typical)}</small>}</strong>
                   <span className={`compact-rating ${spot.rating.toLowerCase()}`}>{spot.rating}</span>
                   <span className="chevron">›</span>
                 </button>

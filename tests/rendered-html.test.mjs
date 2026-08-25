@@ -35,6 +35,6 @@ test("renders production page metadata without development-preview residue", asy
 test("dashboard unavailable states do not inherit another spot's forecast", async () => {
   const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /series\[zone\]\?\.hourly/);
-  assert.match(source, /height: "—", sets: undefined, rating: "Unavailable"/);
+  assert.match(source, /height: "—", typical: undefined, rating: "Unavailable"/);
   assert.match(source, /swellDegrees == null \? "Swell unavailable"/);
 });

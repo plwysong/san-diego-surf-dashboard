@@ -152,14 +152,33 @@ export function componentFaceFeet(profile: Profile, component: WaveComponent, ne
   return Math.max(0, component.height * 3.28084 * profile.shoal * exposure * periodResponse * calibratedResponse);
 }
 
+/**
+ * Two bands from one face estimate.
+ *
+ * The headline is the set-wave band. Measured against Surfline across nine San
+ * Diego breaks on 2026-08-25, that band matched theirs to within 0.11 ft on
+ * average, while the typical band ran 1.11 ft low. Publishing the typical band
+ * as the surf height made a correct forecast look like an under-call: a reader
+ * saw 1-2 ft here and 2-3 ft everywhere else and reasonably concluded this was
+ * broken. The physics agreed all along; the label did not.
+ *
+ * Both bands are kept, because the average wave between sets is genuinely
+ * different information from the sets themselves.
+ */
 export function spotHeight(profile: Profile, wave: WaveEstimate) {
   const contributions = wave.components.map((component) => componentFaceFeet(profile, component, wave.nearshore));
   const faceFeet = Math.sqrt(contributions.reduce((sum, value) => sum + value ** 2, 0));
   const typicalLow = Math.max(0, Math.round(faceFeet * .72));
   const typicalHigh = Math.max(typicalLow + 1, Math.round(faceFeet * 1.02));
-  const setLow = Math.max(typicalHigh, Math.round(faceFeet * 1.08));
-  const setHigh = Math.max(setLow + 1, Math.round(faceFeet * 1.42));
-  return { low: typicalLow, high: typicalHigh, label: `${typicalLow}–${typicalHigh} ft`, sets: `${setLow}–${setHigh} ft`, faceFeet };
+  const surfLow = Math.max(typicalHigh, Math.round(faceFeet * 1.08));
+  const surfHigh = Math.max(surfLow + 1, Math.round(faceFeet * 1.42));
+  return {
+    faceFeet,
+    /** Headline surf height, the set-wave band. */
+    label: `${surfLow}–${surfHigh} ft`,
+    /** The average wave between sets, smaller than the headline. */
+    typical: `${typicalLow}–${typicalHigh} ft`,
+  };
 }
 
 export function scoreConditions(profile: Profile, period: number, windSpeed: number | null, windDirection: number | null, tide: number | null, faceFeet: number) {

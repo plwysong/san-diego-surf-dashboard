@@ -201,7 +201,7 @@ test("provider degradation is explicit and outages are briefly coalesced", async
     assert.equal(Object.keys(partial.dailyConditions).length, 5);
     assert.ok(Object.values(partial.dailyConditions).every((day) => day.length === 17));
     assert.ok(Object.values(partial.dailyConditions)[1][0].hourly.length > 0);
-    assert.ok(Object.values(partial.dailyConditions).every((day) => day.every((spot) => spot.dayHeight && spot.daySets && spot.dayPeak && spot.daySource)));
+    assert.ok(Object.values(partial.dailyConditions).every((day) => day.every((spot) => spot.dayHeight && spot.dayTypical && spot.dayPeak && spot.daySource)));
     assert.equal(partial.providers.mop.ok, true);
     assert.equal(partial.providers.cdip.ok, true);
     assert.equal(partial.providers.spectra.ok, false);
@@ -339,7 +339,7 @@ test("an expired durable row is not replayed while another worker refreshes", as
   }
 });
 
-test("spectral forecasts preserve long-period swell, publish sets, and use NWS wind fallback", async () => {
+test("spectral forecasts preserve long-period swell, publish both height bands, and use NWS wind fallback", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (input) => {
@@ -386,12 +386,12 @@ test("spectral forecasts preserve long-period swell, publish sets, and use NWS w
     const futureOb = payload.dailyConditions[tomorrowKey].find((spot) => spot.name === "Ocean Beach");
     assert.ok(Number.parseInt(futureOb.period) >= 14);
     assert.match(futureOb.swell, /S|SW/);
-    const typicalHigh = Number(futureOb.height.match(/\d+/g).at(-1));
-    const setHigh = Number(futureOb.sets.match(/\d+/g).at(-1));
+    const typicalHigh = Number(futureOb.typical.match(/\d+/g).at(-1));
+    const setHigh = Number(futureOb.height.match(/\d+/g).at(-1));
     assert.ok(setHigh > typicalHigh);
     assert.equal(futureOb.secondarySwellSource, "CDIP spectrum");
     assert.match(futureOb.dayHeight, /^\d+–\d+ ft$/);
-    assert.match(futureOb.daySets, /^\d+–\d+ ft$/);
+    assert.match(futureOb.dayTypical, /^\d+–\d+ ft$/);
     assert.match(futureOb.dayPeak, /AM|PM/);
     assert.match(futureOb.daySource, /Nearshore model|Regional planning guide/);
   } finally {
