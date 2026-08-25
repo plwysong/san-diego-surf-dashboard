@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import SurfMap from "./SurfMap";
+import ErrorBoundary from "./ErrorBoundary";
 import { isFutureForecastDate, sanDiegoDateKey } from "../lib/forecast/dates";
 
 type Zone = "North County" | "Central" | "South Bay";
@@ -194,7 +195,7 @@ export default function Home() {
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
   const [dataMode, setDataMode] = useState<"loading" | "live" | "partial" | "cached" | "unavailable">("loading");
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [providerSummary, setProviderSummary] = useState("Forecast data refreshes every 15 minutes.");
+  const [providerSummary, setProviderSummary] = useState("The dashboard checks for updates every 15 minutes; stored forecasts refresh hourly.");
   const spotlightRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -346,14 +347,20 @@ export default function Home() {
 
       <div className="dashboard" id="top">
         <section className="map-panel" aria-label="Geographic San Diego County surf map">
-          <SurfMap
-            spots={displayedSpots}
-            zone={zone}
-            selectedName={selected.name}
-            units={units}
-            swellLabel={selected.swellDegrees == null ? "Swell unavailable" : `${selected.swell} ${selected.swellDegrees}°`}
-            onSelect={focusSpot}
-          />
+          <ErrorBoundary
+            label="Surf map"
+            resetKey={updatedAt?.toISOString()}
+            fallback={<p className="panel-unavailable">The map could not be displayed. Forecast values are unaffected and remain available in the panel.</p>}
+          >
+            <SurfMap
+              spots={displayedSpots}
+              zone={zone}
+              selectedName={selected.name}
+              units={units}
+              swellLabel={selected.swellDegrees == null ? "Swell unavailable" : `${selected.swell} ${selected.swellDegrees}°`}
+              onSelect={focusSpot}
+            />
+          </ErrorBoundary>
         </section>
 
         <aside className="conditions-panel">
@@ -415,7 +422,13 @@ export default function Home() {
 
             {selected.summary && <p className="forecast-summary">{selected.summary}<span>Data confidence: {selected.confidenceReason}. Forecast skill: {selected.forecastSkill ?? "not yet measured"}. The score measures coverage and agreement—not accuracy or probability.</span></p>}
 
-            <QualityTrend hours={hourly} future={isFuture} />
+            <ErrorBoundary
+              label="Quality trend"
+              resetKey={`${selected.name}-${activeDateKey ?? ""}`}
+              fallback={<p className="forecast-unavailable">The quality trend could not be displayed.</p>}
+            >
+              <QualityTrend hours={hourly} future={isFuture} />
+            </ErrorBoundary>
           </section>
 
           <section className="nearby-card">
