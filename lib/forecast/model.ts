@@ -36,12 +36,24 @@ export type WaveEstimate = {
   direction: number;
   period: number;
   nearshore: boolean;
+  /** CDIP's own per-bin input coverage at this hour, averaged. Undefined off the nearshore model. */
+  inputCoverage?: number;
+  averagePeriod?: number;
+  radiationStressXx?: number;
+  radiationStressXy?: number;
   components: WaveComponent[];
   componentSource: "CDIP spectrum" | "Regional partitions" | "Bulk peak";
 };
 
 export type HourlyData = {
   time: string[];
+  /** Mean period. Tp/Ta indicates spectral width; archived, not yet scored. */
+  wave_period_average?: Array<number | null>;
+  /** Radiation stress. Drives setup and longshore current; archived, not yet scored. */
+  radiation_stress_xx?: Array<number | null>;
+  radiation_stress_xy?: Array<number | null>;
+  /** Fraction of the spectrum CDIP constrained with real buoy input, 0-1. */
+  model_input_coverage?: Array<number | null>;
   wave_height?: Array<number | null>;
   wave_direction?: Array<number | null>;
   wave_period?: Array<number | null>;
@@ -170,7 +182,7 @@ export function rating(score: number): Rating {
   return "Poor";
 }
 
-export function forecastConfidence({ nearshore, observation, windObserved, tidesLive, windLive, horizonHours, offshoreHeight, nearshoreHeight, modelPeriod, modelDirection }: {
+export function forecastConfidence({ nearshore, observation, windObserved, tidesLive, windLive, horizonHours, offshoreHeight, nearshoreHeight, modelPeriod, modelDirection, inputCoverage }: {
   nearshore: boolean;
   observation: { item: CdipObservation; distance: number } | null;
   windObserved: boolean;
@@ -181,10 +193,18 @@ export function forecastConfidence({ nearshore, observation, windObserved, tides
   nearshoreHeight: number;
   modelPeriod: number;
   modelDirection: number;
+  inputCoverage?: number;
 }): Confidence {
   let score = 32;
   const reasons: string[] = [];
-  if (nearshore) { score += 27; reasons.push("CDIP nearshore model"); }
+  if (nearshore) {
+    // The nearshore credit is worth what the model was actually constrained by.
+    // CDIP reports that per frequency bin, so scale the credit rather than
+    // inventing a separate penalty. Full coverage leaves the credit unchanged.
+    const coverage = inputCoverage == null ? 1 : Math.max(0, Math.min(1, inputCoverage));
+    score += 27 * coverage;
+    reasons.push(coverage >= .995 ? "CDIP nearshore model" : `CDIP nearshore model, ${Math.round(coverage * 100)}% observed`);
+  }
   const evidenceWeight = Math.exp(-Math.max(0, horizonHours) / 18);
   if (observation && observation.distance <= 35 && offshoreHeight != null && offshoreHeight > 0) {
     const heightResidual = Math.abs(observation.item.waveHeightM - offshoreHeight) / Math.max(.25, offshoreHeight);

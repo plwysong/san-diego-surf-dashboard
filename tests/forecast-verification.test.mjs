@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { componentFaceFeet, profiles } from "../lib/forecast/model.ts";
+import { componentFaceFeet, forecastConfidence, profiles } from "../lib/forecast/model.ts";
 import { evaluateForecastSkill, groupForecastSkill } from "../lib/forecast/verification.ts";
 
 const sample = (overrides = {}) => ({
@@ -60,4 +60,32 @@ test("targeted response calibration only changes the configured swell band", () 
   const uncalibrated = { ...blacks, response: undefined };
   assert.ok(componentFaceFeet(blacks, long, true) > componentFaceFeet(uncalibrated, long, true));
   assert.equal(componentFaceFeet(blacks, mid, true), componentFaceFeet(uncalibrated, mid, true));
+});
+
+test("confidence tracks how much of the spectrum CDIP actually observed", () => {
+  const base = {
+    nearshore: true, observation: null, windObserved: false, tidesLive: true, windLive: true,
+    horizonHours: 0, offshoreHeight: null, nearshoreHeight: 1.2, modelPeriod: 16, modelDirection: 255,
+  };
+
+  const full = forecastConfidence({ ...base, inputCoverage: 1 });
+  const absent = forecastConfidence(base);
+  const degraded = forecastConfidence({ ...base, inputCoverage: 0.6 });
+
+  // An unreported coverage must not silently penalise the regional-free path.
+  assert.equal(absent.score, full.score);
+
+  // The nearshore credit is worth what the model was constrained by.
+  assert.ok(degraded.score < full.score, "partial observation must reduce confidence");
+  assert.match(degraded.reason, /60% observed/);
+  assert.match(full.reason, /CDIP nearshore model/);
+  assert.doesNotMatch(full.reason, /% observed/);
+
+  // Scaling the existing credit, not inventing a separate penalty: the drop is
+  // exactly the unobserved fraction of that credit.
+  assert.ok(Math.abs((full.score - degraded.score) - Math.round(27 * 0.4)) <= 1);
+
+  // Off the nearshore model there is no credit to scale.
+  const regional = forecastConfidence({ ...base, nearshore: false, inputCoverage: 0.6 });
+  assert.equal(regional.score, forecastConfidence({ ...base, nearshore: false }).score);
 });

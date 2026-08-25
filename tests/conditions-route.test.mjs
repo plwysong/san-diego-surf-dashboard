@@ -376,7 +376,7 @@ test("spectral forecasts preserve long-period swell, publish sets, and use NWS w
     const route = await import(`../app/api/conditions/route.ts?spectral=${Date.now()}`);
     const payload = await (await route.GET()).json();
     assert.equal(payload.mode, "live");
-    assert.match(payload.providers.mop.detail, /8 include forecast spectral partitions/);
+    assert.match(payload.providers.mop.detail, /17 include forecast spectral partitions/);
     assert.match(payload.providers.wind.detail, /North County: NWS/);
     const currentOb = payload.conditions.find((spot) => spot.name === "Ocean Beach");
     assert.equal(currentOb.windSource, "NWS");

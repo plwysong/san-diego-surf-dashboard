@@ -249,10 +249,10 @@ function formatTide(tide: TideEstimate) {
 }
 
 const mopFrequencies = [.04, .045, .05, .055, .06, .065, .07, .075, .08, .085, .09, .095, .1013, .11, .12, .13, .14, .15, .16, .17, .18, .19, .2, .21, .22, .23, .24, .25];
-// La Jolla Shores is included because it is the most sheltered break in the set
-// and carried roughly double every other break's error in the measured results,
-// which is what directional spread governs. See docs/forecast-verification.md.
-const prioritySpectralSpots = new Set(["Trestles", "Swami’s", "Blacks", "La Jolla Shores", "Windansea", "Ocean Beach", "Sunset Cliffs", "Imperial Beach"]);
+// Every break requests its spectrum. Spectral partitions separate long-, mid-
+// and short-period energy and carry directional spread, and the measured results
+// show the regional partition fallback is the least accurate path.
+const spectralSpots = new Set(profiles.map((profile) => profile.name));
 const mopBandwidths = mopFrequencies.map((frequency, index) => {
   const lower = index === 0 ? frequency - (mopFrequencies[1] - frequency) / 2 : (mopFrequencies[index - 1] + frequency) / 2;
   const upper = index === mopFrequencies.length - 1 ? frequency + (frequency - mopFrequencies[index - 1]) / 2 : (frequency + mopFrequencies[index + 1]) / 2;
@@ -327,11 +327,11 @@ async function fetchMopForecast(profile: Profile) {
     url.searchParams.set("accept", "csv");
     return url.toString();
   };
-  const spectralPromise = prioritySpectralSpots.has(profile.name)
+  const spectralPromise = spectralSpots.has(profile.name)
     ? fetchText(`CDIP MOP spectrum ${profile.mopId}`, requestUrl(["waveEnergyDensity", "waveMeanDirection", "waveA1Value", "waveB1Value"]), 8_000).catch(() => null)
     : Promise.resolve(null);
   const [text, spectralText] = await Promise.all([
-    fetchText(`CDIP MOP ${profile.mopId}`, requestUrl(["waveHs", "waveTp", "waveDp"])),
+    fetchText(`CDIP MOP ${profile.mopId}`, requestUrl(["waveHs", "waveTp", "waveDp", "waveTa", "waveSxx", "waveSxy", "waveModelBinInputCoverage"])),
     spectralPromise,
   ]);
   const rows = parseCsvRows(text);
@@ -341,6 +341,10 @@ async function fetchMopForecast(profile: Profile) {
   const heightColumn = column("waveHs");
   const periodColumn = column("waveTp");
   const directionColumn = column("waveDp");
+  const averagePeriodColumn = column("waveTa");
+  const stressXxColumn = column("waveSxx");
+  const stressXyColumn = column("waveSxy");
+  const coverageColumn = column("waveModelBinInputCoverage");
   const spectralByTime = new Map<string, { energy: Array<number | null>; directions: Array<number | null>; a1?: Array<number | null>; b1?: Array<number | null> }>();
   if (spectralText) {
     const spectralRows = parseCsvRows(spectralText);
@@ -365,12 +369,23 @@ async function fetchMopForecast(profile: Profile) {
     const spectral = spectralByTime.get(row[timeColumn]);
     const energyDensity = spectral?.energy ?? [];
     const meanDirections = spectral?.directions ?? [];
+    // CDIP reports coverage per frequency bin; the mean is the fraction of the
+    // spectrum constrained by real buoy input at this hour.
+    const coverageBins = coverageColumn >= 0 ? parseBinVector(row[coverageColumn]).filter((value): value is number => value != null) : [];
+    const optional = (index: number) => {
+      const value = index >= 0 ? Number(row[index]) : Number.NaN;
+      return Number.isFinite(value) ? value : null;
+    };
     return {
       sourceTime: row[timeColumn],
       time: localKeyFromUtc(row[timeColumn]),
       height,
       period: Number(row[periodColumn]),
       direction: Number(row[directionColumn]),
+      averagePeriod: optional(averagePeriodColumn),
+      stressXx: optional(stressXxColumn),
+      stressXy: optional(stressXyColumn),
+      coverage: coverageBins.length ? coverageBins.reduce((sum, value) => sum + value, 0) / coverageBins.length : null,
       components: energyDensity.length === mopFrequencies.length && meanDirections.length === mopFrequencies.length
         ? spectralPartitions(energyDensity, meanDirections, height, spectral?.a1, spectral?.b1)
         : [],
@@ -393,6 +408,10 @@ async function fetchMopForecast(profile: Profile) {
     wave_height: values.map((row) => row.height),
     wave_period: values.map((row) => row.period),
     wave_direction: values.map((row) => row.direction),
+    wave_period_average: values.map((row) => row.averagePeriod),
+    radiation_stress_xx: values.map((row) => row.stressXx),
+    radiation_stress_xy: values.map((row) => row.stressXy),
+    model_input_coverage: values.map((row) => row.coverage),
     spectral_components: values.map((row) => row.components),
     dataTimestamp: values.at(-1)?.sourceTime,
   } satisfies HourlyData & { dataTimestamp?: string };
@@ -527,7 +546,15 @@ function waveAt(profile: Profile, marine: HourlyData, index: number, mop?: Hourl
   components = [...components].sort((a, b) => componentFaceFeet(profile, b, nearshore) - componentFaceFeet(profile, a, nearshore));
   const primary = components[0];
   const height = bulk?.height ?? Math.sqrt(components.reduce((sum, component) => sum + component.height ** 2, 0));
-  return { height, direction: primary.direction, period: primary.period, nearshore, components, componentSource };
+  return {
+    height, direction: primary.direction, period: primary.period, nearshore, components, componentSource,
+    ...(nearshore ? {
+      inputCoverage: source.model_input_coverage?.[sourceIndex] ?? undefined,
+      averagePeriod: source.wave_period_average?.[sourceIndex] ?? undefined,
+      radiationStressXx: source.radiation_stress_xx?.[sourceIndex] ?? undefined,
+      radiationStressXy: source.radiation_stress_xy?.[sourceIndex] ?? undefined,
+    } : {}),
+  };
 }
 
 function peakWaveAt(profile: Profile, marine: HourlyData, indexes: number[], mop?: HourlyData, includeRegionalGuide = false) {
@@ -624,6 +651,13 @@ function rawForecastRecord(
     tideFt,
     nearshore: wave.nearshore,
     mopId: profile.mopId,
+    // Captured for later use. Unstored runs are unrecoverable, and these have no
+    // calibrated role in scoring yet: spectral width from Tp/Ta, and the
+    // radiation stresses that drive setup and longshore current.
+    averagePeriodS: wave.averagePeriod ?? null,
+    radiationStressXx: wave.radiationStressXx ?? null,
+    radiationStressXy: wave.radiationStressXy ?? null,
+    inputCoverage: wave.inputCoverage ?? null,
   };
 }
 
@@ -893,6 +927,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
     nearshoreHeight: wave.height,
     modelPeriod: wave.period,
     modelDirection: wave.direction,
+    inputCoverage: wave.inputCoverage,
   });
 
   return {
@@ -1061,6 +1096,7 @@ async function buildPayload() {
       nearshoreHeight: wave.height,
       modelPeriod: wave.period,
       modelDirection: wave.direction,
+      inputCoverage: wave.inputCoverage,
     });
     return [{
       name: profile.name,
