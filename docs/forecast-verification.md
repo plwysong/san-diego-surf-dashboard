@@ -83,7 +83,7 @@ Nothing here touches the breaking-face translation. `spotHeight()` converts sign
 
 Calibration of the face-height step stays a separate, lighter question. The input chain is now shown to be sound, so the remaining uncertainty sits in a handful of constants, and occasional informal comparison is informative. It does not require a sampling programme, and one should not be specified.
 
-Options for closing the remaining gaps, including what could be bought and what could not, are recorded in [data-source-options.md](./data-source-options.md).
+Data sources that could improve the model itself, free and paid, are recorded in [data-source-options.md](./data-source-options.md).
 
 ## Forecast semantics
 
