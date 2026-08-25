@@ -8,6 +8,12 @@ Sample values below were measured at `D0537` (Blacks) on 2026-08-25.
 
 ## Tier 1 — already in the CDIP requests being made
 
+**Status: done.** All of the below is now consumed. Every break requests its
+spectrum, `waveModelBinInputCoverage` scales the nearshore confidence credit,
+and `waveTa`, `waveSxx` and `waveSxy` are archived pending calibration. The
+source mix moved from 8 CDIP spectrum / 9 regional partitions to 17 / 0, and
+refresh cost went from 39 to 48 requests with wall clock unchanged.
+
 `fetchMopForecast()` requests `waveHs`, `waveTp`, `waveDp`, plus `waveEnergyDensity` and `waveMeanDirection` for the seven spots in `prioritySpectralSpots`. Every MOP point also publishes the following, at no extra request cost.
 
 ### Directional Fourier coefficients — `waveA1Value`, `waveB1Value`, `waveA2Value`, `waveB2Value`
@@ -65,7 +71,7 @@ Ranked by whether they add physics or convenience.
 
 ## Suggested order
 
-1. Consume the CDIP variables already being returned, starting with the directional coefficients. No new dependency, no new request, and it addresses the largest measured error in the current results.
+1. ~~Consume the CDIP variables already being returned.~~ Done.
 2. Add observed water level and wind gusts. Small, free, and both feed terms the scoring function already has.
 3. Take the multi-model mean, and use the spread as a calibrated uncertainty rather than the present heuristic.
 4. Investigate NWPS and bathymetry, which are the two that could change the model's structure rather than its inputs.
