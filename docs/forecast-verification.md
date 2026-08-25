@@ -83,6 +83,8 @@ Nothing here touches the breaking-face translation. `spotHeight()` converts sign
 
 Calibration of the face-height step stays a separate, lighter question. The input chain is now shown to be sound, so the remaining uncertainty sits in a handful of constants, and occasional informal comparison is informative. It does not require a sampling programme, and one should not be specified.
 
+Options for closing the remaining gaps, including what could be bought and what could not, are recorded in [data-source-options.md](./data-source-options.md).
+
 ## Forecast semantics
 
 Daily planning ranges use one coherent forecast hour and source. Breaks explicitly calibrated for a regional upside check may select the larger daytime response from either the break-adjacent forecast or the independent regional planning guide. Their wave components are evaluated separately and never combined. Other breaks remain nearshore-only. Best-window details stay tied to the representative hour inside the highest-quality daylight window. These two values must not be mixed.

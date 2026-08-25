@@ -38,7 +38,8 @@ npm test
 - `lib/forecast/dates.ts` — San Diego-local date boundaries for current and future forecast views
 - `db/` — durable forecast-cache schema and access
 - `tests/` — provider-failure and forecast-engine regression tests
-- `docs/forecast-verification.md` — forecast-skill sampling and evaluation rules
+- `docs/forecast-verification.md` — what can be verified, measured skill, and evaluation rules
+- `docs/data-source-options.md` — paid and non-free data options, and which measured gap each would close
 - `.openai/hosting.json` — current ChatGPT Sites deployment configuration
 - `AGENTS.md` — working conventions for Codex and other coding agents
 
