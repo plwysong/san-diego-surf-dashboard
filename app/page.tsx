@@ -103,7 +103,7 @@ function unavailableSpot(spot: SpotDefinition): Spot {
     confidence: "Low",
     confidenceScore: 0,
     confidenceReason: "Live forecast unavailable",
-    forecastSkill: "Not yet measured",
+    forecastSkill: "Not measured",
     modelPoint: "Unavailable",
     summary: "Waiting for live source data",
     hourly: [],
@@ -420,7 +420,7 @@ export default function Home() {
               <div><Icon name="temp" /><span><small>{isFuture ? "Latest water" : "Water"}</small><b>{selected.water}</b></span></div>
             </div>
 
-            {selected.summary && <p className="forecast-summary">{selected.summary}<span>Data confidence: {selected.confidenceReason}. Forecast skill: {selected.forecastSkill ?? "not yet measured"}. The score measures coverage and agreement—not accuracy or probability.</span></p>}
+            {selected.summary && <p className="forecast-summary">{selected.summary}<span>Data confidence: {selected.confidenceReason}. Forecast skill: {selected.forecastSkill ?? "not measured"}. The score measures coverage and agreement—not accuracy or probability.</span></p>}
 
             <ErrorBoundary
               label="Quality trend"

@@ -856,7 +856,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
     confidence: confidence.label,
     confidenceScore: confidence.score,
     confidenceReason: confidence.reason,
-    forecastSkill: "Not yet measured",
+    forecastSkill: "Not measured",
     modelPoint: wave.nearshore ? profile.mopId : "Regional fallback",
     summary: conditionSummary(profile, wave.period, windSpeed, windDirection, tide.value),
     hourly: chartIndexes.map((hourIndex) => ({
@@ -1019,7 +1019,7 @@ async function buildPayload() {
       confidence: confidence.label,
       confidenceScore: confidence.score,
       confidenceReason: confidence.reason,
-      forecastSkill: "Not yet measured",
+      forecastSkill: "Not measured",
       modelPoint: wave.nearshore ? profile.mopId : "Regional fallback",
       summary: conditionSummary(profile, wave.period, windSpeed, windDirection, tide.value),
       hourly: buildSpotHourly(profile, data.marine, data.weather, tides, index, mop),

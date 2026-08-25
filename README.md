@@ -48,7 +48,7 @@ The dashboard uses CDIP nearshore and buoy data, Open-Meteo marine/weather forec
 
 Forecast values are modeled estimates, not direct observations of breaking wave faces. Missing wave, tide, wind, or water values are shown as unavailable rather than filled with synthetic defaults. A stored forecast is labeled cached, retains the provider status from its generation time, and has its confidence reduced as it ages.
 
-The five-day strip shows the largest coherent daytime face response and its larger-set range so surfers can see an incoming build even when the cleanest window occurs earlier. Breaks with a verified tendency for the mapped nearshore point to flatten incoming long-period energy can also use the independent regional planning guide. The selected value always comes from one source and one forecast hour; model components are never mixed. Selecting a future day opens the separate best-window estimate. Source confidence is not presented as measured accuracy; forecast skill remains unmeasured until enough verified spot observations have been collected.
+The five-day strip shows the largest coherent daytime face response and its larger-set range so surfers can see an incoming build even when the cleanest window occurs earlier. Breaks with a verified tendency for the mapped nearshore point to flatten incoming long-period energy can also use the independent regional planning guide. The selected value always comes from one source and one forecast hour; model components are never mixed. Selecting a future day opens the separate best-window estimate. Source confidence is not presented as measured accuracy, and forecast skill is not measured.
 
 ## Deployment
 
