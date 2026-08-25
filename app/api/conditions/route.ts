@@ -23,6 +23,7 @@ import {
 } from "../../../lib/forecast/model.ts";
 import { fetchJson, fetchText, inRange, isFresh, parseCsvRows, settledMapWithConcurrency } from "../../../lib/forecast/providers.ts";
 
+type ForecastMode = "live" | "partial" | "unavailable";
 type ForecastResponse = { hourly?: HourlyData; error?: boolean; reason?: string };
 type TidePrediction = { t: string; v: string; type?: string };
 type TideEstimate = { value: number | null; trend: "steady" | "rising" | "falling" | null };
@@ -1100,8 +1101,11 @@ async function buildPayload() {
     tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations have complete five-day coverage; unbracketed hours are unavailable`, checkedAt: generatedAt, validThrough: tideValidThrough },
     buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 fallback observation live" : "CDIP observations are primary", checkedAt: generatedAt, dataTimestamp: buoyResult.value?.observedAt },
   };
+  // Declared rather than inferred so the cache layer's payload contract is
+  // enforced here instead of relying on this ternary being widened correctly.
+  const mode: ForecastMode = coreForecastLive ? "live" : conditions.length > 0 ? "partial" : "unavailable";
   return {
-    mode: coreForecastLive ? "live" : conditions.length > 0 ? "partial" : "unavailable",
+    mode,
     generatedAt,
     buoy: buoyResult.value,
     conditions,

@@ -4,6 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import type { Map as LeafletMap, LayerGroup as LeafletLayerGroup } from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// Leaflet is CJS. Bundler interop usually exposes the namespace on `default`,
+// but not always, so resolve it once here rather than reaching for `.default`
+// at every call site — a miss there silently renders a map with no markers.
+type LeafletApi = typeof import("leaflet");
+const resolveLeaflet = (module: LeafletApi): LeafletApi =>
+  (module as { default?: LeafletApi }).default ?? module;
+
 type Zone = "North County" | "Central" | "South Bay";
 
 type MapSpot = {
@@ -53,7 +60,7 @@ export default function SurfMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const markerLayerRef = useRef<LeafletLayerGroup | null>(null);
-  const leafletRef = useRef<typeof import("leaflet") | null>(null);
+  const leafletRef = useRef<LeafletApi | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -61,8 +68,8 @@ export default function SurfMap({
 
     void import("leaflet").then((module) => {
       if (!active || !containerRef.current || mapRef.current) return;
-      const L = module.default;
-      leafletRef.current = module;
+      const L = resolveLeaflet(module);
+      leafletRef.current = L;
       const map = L.map(containerRef.current, {
         zoomControl: true,
         minZoom: 8,
@@ -88,7 +95,7 @@ export default function SurfMap({
   }, []);
 
   useEffect(() => {
-    const L = leafletRef.current?.default;
+    const L = leafletRef.current;
     const map = mapRef.current;
     const group = markerLayerRef.current;
     if (!ready || !L || !map || !group) return;

@@ -39,5 +39,8 @@ next-env.d.ts
 /dist/
 /.wrangler/
 /.sites-runtime/
+# Generated font cache. Committing it bakes the build machine's absolute
+# paths into the emitted @font-face URLs, which then 404 on every other host.
+/.vinext/
 /outputs/
 /work/

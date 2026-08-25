@@ -7,21 +7,38 @@ if [[ "${SITES_ENV_READY:-}" != "1" ]]; then
   exec "${script_dir}/sites-env.sh" -- "$0" "$@"
 fi
 
-command -v flock >/dev/null || {
-  echo "install-ci.sh requires Linux flock." >&2
-  exit 69
-}
-command -v timeout >/dev/null || {
-  echo "install-ci.sh requires GNU timeout." >&2
-  exit 69
-}
 command -v curl >/dev/null || {
   echo "install-ci.sh requires curl for the locked-tarball preflight." >&2
   exit 69
 }
-command -v sha256sum >/dev/null || {
-  echo "install-ci.sh requires sha256sum for cache and install verification." >&2
+command -v sha256sum >/dev/null || command -v shasum >/dev/null || {
+  echo "install-ci.sh requires sha256sum or shasum for cache and install verification." >&2
   exit 69
+}
+
+# Integrity verification is mandatory; the concurrency guards below are not.
+# flock, /proc and GNU timeout are Linux-image conveniences, so degrade to a
+# warning instead of refusing to install on other hosts (macOS).
+sha256_of() {
+  if command -v sha256sum >/dev/null; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+run_bounded() {
+  local bound="${SITES_INSTALL_TIMEOUT:-8m}"
+  local kill_after="${SITES_INSTALL_KILL_AFTER:-15s}"
+
+  if command -v timeout >/dev/null; then
+    timeout --signal=TERM --kill-after="${kill_after}" "${bound}" "$@"
+  elif command -v gtimeout >/dev/null; then
+    gtimeout --signal=TERM --kill-after="${kill_after}" "${bound}" "$@"
+  else
+    echo "[sites] GNU timeout unavailable; running the install unbounded." >&2
+    "$@"
+  fi
 }
 
 runtime_root="${SITES_PROJECT_ROOT}/.sites-runtime"
@@ -33,37 +50,48 @@ if [[ "${HOME}" != "${expected_home}" ]]; then
   echo "Expected HOME=${expected_home}, got HOME=${HOME}." >&2
   exit 78
 fi
-actual_cache="$(npm config get cache)"
-if [[ "${actual_cache}" != "${expected_cache}" ]]; then
-  echo "Expected npm cache ${expected_cache}, got ${actual_cache}." >&2
-  exit 78
+# npm 11 refuses `npm config get cache` ("the cache option is protected"), and
+# `npm config ls -l` redacts path segments that look like secrets, so neither
+# can be compared exactly. The authoritative enforcement is the explicit
+# `--cache` passed to `npm ci` below; this check stays as a diagnostic.
+actual_cache="$(npm config ls -l 2>/dev/null | sed -n 's/^cache = //p' | head -1 | sed 's/^"//; s/"$//')"
+if [[ -n "${actual_cache}" && "${actual_cache}" != "${expected_cache}" ]]; then
+  echo "[sites] note: npm reports cache ${actual_cache}; forcing ${expected_cache} via --cache." >&2
 fi
+
+# Writability is the real gate and is verified directly.
 touch "${HOME}/.sites-write-test" "${expected_cache}/.sites-write-test"
 rm -f "${HOME}/.sites-write-test" "${expected_cache}/.sites-write-test"
 echo "[sites] environment passed: HOME=${HOME}, cache=${expected_cache}"
 
 lock_file="${runtime_root}/install.lock"
 exec 9>"${lock_file}"
-if ! flock -n 9; then
-  echo "Another dependency install is already running for ${SITES_PROJECT_ROOT}." >&2
-  exit 75
+if command -v flock >/dev/null; then
+  if ! flock -n 9; then
+    echo "Another dependency install is already running for ${SITES_PROJECT_ROOT}." >&2
+    exit 75
+  fi
+else
+  echo "[sites] flock unavailable; skipping the cross-process install lock." >&2
 fi
 
 # Catch an installer started outside this helper. Linux exposes both its command
 # line and working directory through /proc, so avoid broad process-name matches.
-for process in /proc/[0-9]*; do
-  pid="${process##*/}"
-  [[ "${pid}" != "$$" && "${pid}" != "${PPID}" ]] || continue
-  process_cwd="$(readlink -f "${process}/cwd" 2>/dev/null || true)"
-  [[ "${process_cwd}" == "${SITES_PROJECT_ROOT}" ]] || continue
-  process_command="$(tr '\0' ' ' <"${process}/cmdline" 2>/dev/null || true)"
-  if [[ "${process_command}" == *"npm ci"* ]]; then
-    echo "Another npm ci is visible in ${SITES_PROJECT_ROOT}; refusing to overlap installs." >&2
-    exit 75
-  fi
-done
+if [[ -d /proc ]]; then
+  for process in /proc/[0-9]*; do
+    pid="${process##*/}"
+    [[ "${pid}" != "$$" && "${pid}" != "${PPID}" ]] || continue
+    process_cwd="$(readlink -f "${process}/cwd" 2>/dev/null || true)"
+    [[ "${process_cwd}" == "${SITES_PROJECT_ROOT}" ]] || continue
+    process_command="$(tr '\0' ' ' <"${process}/cmdline" 2>/dev/null || true)"
+    if [[ "${process_command}" == *"npm ci"* ]]; then
+      echo "Another npm ci is visible in ${SITES_PROJECT_ROOT}; refusing to overlap installs." >&2
+      exit 75
+    fi
+  done
+fi
 
-lockfile_sha256="$(sha256sum "${SITES_PROJECT_ROOT}/package-lock.json" | awk '{print $1}')"
+lockfile_sha256="$(sha256_of "${SITES_PROJECT_ROOT}/package-lock.json")"
 use_seeded_cache=0
 seed_cache="${SITES_NPM_CACHE_SEED:-}"
 if [[ -n "${seed_cache}" && -d "${seed_cache}" ]]; then
@@ -93,14 +121,12 @@ NODE
   echo "Could not read the integrity-pinned vinext tarball from package-lock.json." >&2
   exit 65
 }
-mapfile -t locked_vinext <<<"${locked_vinext_output}"
-if [[ "${#locked_vinext[@]}" -ne 2 ]]; then
+locked_tarball="$(printf '%s\n' "${locked_vinext_output}" | sed -n '1p')"
+locked_integrity="$(printf '%s\n' "${locked_vinext_output}" | sed -n '2p')"
+if [[ -z "${locked_tarball}" || -z "${locked_integrity}" ]]; then
   echo "Expected exactly one Vinext URL and integrity value from package-lock.json." >&2
   exit 65
 fi
-
-locked_tarball="${locked_vinext[0]}"
-locked_integrity="${locked_vinext[1]}"
 
 if [[ "${use_seeded_cache}" == "0" ]]; then
   registry="$(npm config get registry)"
@@ -162,11 +188,7 @@ npm_ci_args=(ci --cache "${expected_cache}")
 if [[ "${use_seeded_cache}" == "1" ]]; then
   npm_ci_args+=(--prefer-offline)
 fi
-timeout \
-  --signal=TERM \
-  --kill-after="${SITES_INSTALL_KILL_AFTER:-15s}" \
-  "${SITES_INSTALL_TIMEOUT:-8m}" \
-  npm "${npm_ci_args[@]}"
+run_bounded npm "${npm_ci_args[@]}"
 
 vinext="${SITES_PROJECT_ROOT}/node_modules/.bin/vinext"
 if [[ ! -x "${vinext}" ]]; then
