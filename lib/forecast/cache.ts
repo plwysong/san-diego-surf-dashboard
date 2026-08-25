@@ -5,7 +5,11 @@ type D1StatementLike = { bind(...values: unknown[]): D1StatementLike; run(): Pro
 type D1DatabaseLike = { prepare(query: string): D1StatementLike };
 type ForecastPayload = Record<string, unknown> & { mode: "live" | "partial" | "unavailable" };
 
-const CACHE_KEY = "san-diego-conditions-v11";
+// Bump this whenever the payload shape changes. A stored payload outlives a
+// deploy by up to FRESH_TTL_MS, so without a bump the new UI reads old fields:
+// after the surf-height band change that meant serving the previous headline
+// under the new label, which looks exactly like the change having failed.
+const CACHE_KEY = "san-diego-conditions-v12";
 const FRESH_TTL_MS = 60 * 60 * 1000;
 const STALE_TTL_MS = 36 * 60 * 60 * 1000;
 const REFRESH_LEASE_MS = 45 * 1000;
