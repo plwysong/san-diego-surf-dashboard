@@ -19,6 +19,10 @@ Maintain an accurate, resilient, and honest San Diego surf forecast. Never prese
 - Isolate provider and spot failures; one failure must not erase healthy regions or breaks.
 - Label retained real data as cached/stale, never as current live data.
 - Confidence must reflect freshness, forecast horizon, source availability, and agreement.
+- Confidence is not accuracy. Do not present source confidence as forecast skill, or vice versa.
+- CDIP MOP nowcast and hindcast are the permitted verification reference because they are
+  buoy-initialised, but they remain model output. Never label them an observation. See
+  `docs/forecast-verification.md` before changing anything about verification.
 
 ## Validation
 
