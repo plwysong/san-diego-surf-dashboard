@@ -11,8 +11,13 @@
  * than agreement: a steady offset is a convention difference and harmless, a
  * ratio swinging between half and double is a real calibration defect.
  *
+ *   npm run dev                       # in another terminal; add reads the live forecast
  *   npm run benchmark:add -- --spot Blacks --their 3-4 [--source Surfline]
  *   npm run benchmark:report
+ *
+ * --api, or BENCHMARK_API, points at a different forecast, such as the deployed
+ * site. A deployment running older code may omit the forecast timestamp, which
+ * costs the CDIP truth leg but still records the peer comparison.
  *
  * `add` records what this dashboard is saying right now, so the only thing
  * typed by hand is the peer's number. `report` fetches CDIP nowcast truth for
@@ -22,12 +27,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import { profiles } from "../lib/forecast/model.ts";
 
 const LOG = new URL("../benchmarks/peer-samples.json", import.meta.url);
-const API = process.env.BENCHMARK_API ?? "http://localhost:5173/api/conditions";
+const DEPLOYED = "https://san-diego-surf-dashboard.pwysong.chatgpt.site/api/conditions";
+const LOCAL = "http://localhost:5173/api/conditions";
 const M_TO_FT = 3.28084;
 
 const argv = process.argv.slice(2);
 const command = argv[0];
 const flag = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : undefined; };
+const API = flag("api") ?? process.env.BENCHMARK_API ?? LOCAL;
 
 const readLog = async () => JSON.parse(await readFile(LOG, "utf8"));
 const writeLog = async (samples) => writeFile(LOG, `${JSON.stringify(samples, null, 2)}\n`);
@@ -61,7 +68,26 @@ async function add() {
     process.exit(64);
   }
 
-  const payload = await (await fetch(API, { signal: AbortSignal.timeout(120_000) })).json();
+  let payload;
+  try {
+    const response = await fetch(API, { signal: AbortSignal.timeout(120_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    payload = await response.json();
+  } catch (error) {
+    const reason = error?.cause?.code === "ECONNREFUSED" || /ECONNREFUSED/.test(String(error?.message))
+      ? "nothing is listening there"
+      : error instanceof Error ? error.message : "request failed";
+    console.error(`Could not reach the forecast at ${API} (${reason}).\n`);
+    console.error("This command records what the dashboard is currently saying, so it needs a running forecast. Either:\n");
+    console.error("  1. start the dev server in another terminal, then run this again:");
+    console.error("       npm run dev\n");
+    console.error("  2. or read from the deployed site instead:");
+    console.error(`       npm run benchmark:add -- --spot "${spotArg}" --their ${flag("their")} --api ${DEPLOYED}\n`);
+    console.error("     Note the deployment may be running older code than this checkout, in which case");
+    console.error("     the sample records the comparison but cannot be matched to CDIP truth later.");
+    process.exit(69);
+  }
+
   const ours = payload.conditions?.find((item) => item.name === profile.name);
   if (!ours) {
     console.error(`the dashboard has no current forecast for ${profile.name} (mode=${payload.mode})`);
@@ -73,10 +99,16 @@ async function add() {
     process.exit(69);
   }
 
+  if (!ours.raw?.validAt) {
+    console.warn(`Warning: ${API} returned no forecast timestamp for ${profile.name}.`);
+    console.warn("The comparison is recorded, but this sample cannot be matched to CDIP truth in the report.\n");
+  }
+
   const samples = await readLog();
   samples.push({
     recordedAt: new Date().toISOString(),
     validAt: ours.raw?.validAt ?? null,
+    api: API,
     spot: profile.name,
     mopId: profile.mopId,
     source: flag("source") ?? "Surfline",
@@ -146,6 +178,9 @@ function report(rows) {
     console.log("Inconsistent: the ratio moves too much between samples to be a convention difference. That points at the face translation, not at a scale offset.");
   }
 
+  const untimed = rows.filter((row) => !row.validAt).length;
+  if (untimed) console.log(`\n${untimed} sample${untimed === 1 ? "" : "s"} recorded without a forecast timestamp, so no CDIP truth could be matched.`);
+
   const withTruth = rows.filter((row) => row.truthFt != null);
   if (withTruth.length >= 3) {
     const oursVsTruth = mean(withTruth.map((row) => ((row.oursLow + row.oursHigh) / 2) / (row.truthFt * M_TO_FT)));
@@ -166,6 +201,7 @@ if (command === "add") {
     console.log("No samples yet.\n");
     console.log('  npm run benchmark:add -- --spot "Blacks" --their 3-4');
     console.log("\nRecord what a peer is showing while the dashboard is running; everything else is captured for you.");
+    console.log("Needs a running forecast: `npm run dev` in another terminal, or --api to read the deployed site.");
   } else {
     const rows = [];
     for (const sample of samples) {
