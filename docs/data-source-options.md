@@ -48,8 +48,8 @@ This is a better confidence input than anything `forecastConfidence()` currently
 
 | source | measured | what it would fix |
 | --- | --- | --- |
-| **NOAA CO-OPS observed water level** (`product=water_level`) | Observed 1.897 ft where the prediction said 1.377 ft, a 0.52 ft residual | The model uses tide *predictions* only. Half a foot is enough to move a break in or out of its `tideLow`/`tideHigh` window, and non-tidal residual grows with storm surge. Recent residual can be measured and persisted forward as a correction. |
-| **Wind gusts** (`wind_gusts_10m`) | 24/24 hours populated | Gust-to-mean ratio is surface texture, which is most of what separates clean from bumpy. `scoreConditions()` sees mean wind only. |
+| ~~**NOAA CO-OPS observed water level**~~ **Done.** | +0.54 ft at La Jolla, +0.65 ft at San Diego, stable to 0.04 ft over 12 hours | Residual measured over the last 18 hours and carried onto the predictions with a 24-hour decay, mirroring the existing wind correction. Absent a measurement the harmonic prediction is used unchanged. |
+| ~~**Wind gusts**~~ **Done, displayed and archived, not scored.** | 10/17 breaks showing gusts above the mean | Shown when they round above the mean. Not in `scoreConditions()`: gustiness is clearly bad for quality, but how bad needs a constant that cannot yet be validated. |
 | **Ocean currents** (MeteoFrance SMOC, on the marine endpoint) | velocity and direction, 24/24 hours | Wave–current interaction steepens and refracts swell. Not modelled at all. |
 | **Multi-model mean** (`ecmwf_wam`, `ecmwf_wam025`, `gwam`, `meteofrance_wave`) | all four respond | A multi-model mean usually beats any single member. This is an accuracy gain, separate from using their spread as an uncertainty estimate. |
 | **Sea surface temperature** (marine endpoint) | 24/24 hours | Currently taken from whichever buoy happens to be nearest. A gridded field is more consistent. |
@@ -72,7 +72,7 @@ Ranked by whether they add physics or convenience.
 ## Suggested order
 
 1. ~~Consume the CDIP variables already being returned.~~ Done.
-2. Add observed water level and wind gusts. Small, free, and both feed terms the scoring function already has.
+2. ~~Add observed water level and wind gusts.~~ Done. Water level corrects the tide forecast; gusts are displayed and archived but deliberately unscored.
 3. Take the multi-model mean, and use the spread as a calibrated uncertainty rather than the present heuristic.
 4. Investigate NWPS and bathymetry, which are the two that could change the model's structure rather than its inputs.
 5. Only then price commercial wind, and only if free verification shows wind to be the limiting factor.
