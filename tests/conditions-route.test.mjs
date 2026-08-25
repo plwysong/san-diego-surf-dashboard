@@ -48,6 +48,17 @@ function mopSpectralCsv(station) {
   return `time,waveDp[unit="degreeT"],station,waveHs[unit="meter"],latitude[unit="degrees_north"],waveTp[unit="second"],longitude[unit="degrees_east"],waveEnergyDensity[unit="meter^2 second"],waveMeanDirection[unit="degreeT"]\n${rows.join("\n")}`;
 }
 
+/** CDIP emits literal NaN for bins it cannot resolve, common at sheltered points. */
+function nanBinMopSpectralCsv(station) {
+  const rows = times.filter((_, index) => index % 3 === 0).map((time) => {
+    const utc = new Date(`${time}:00-07:00`).toISOString();
+    const energy = Array.from({ length: 28 }, (_, band) => band <= 1 ? "NaN" : (band >= 13 ? .7 : .035));
+    const directions = Array.from({ length: 28 }, (_, band) => band <= 1 ? "NaN" : (band < 13 ? 250 : 280));
+    return `${utc},280,${station},.900,32.88,8,-117.26,${energy.join(" ")},${directions.join(" ")}`;
+  });
+  return `time,waveDp[unit="degreeT"],station,waveHs[unit="meter"],latitude[unit="degrees_north"],waveTp[unit="second"],longitude[unit="degrees_east"],waveEnergyDensity[unit="meter^2 second"],waveMeanDirection[unit="degreeT"]\n${rows.join("\n")}`;
+}
+
 function gappyMopCsv(station) {
   const offsets = [0, 3, 6, 9, 120, 123, 126, 129];
   const rows = offsets.map((offset) => {
@@ -365,7 +376,7 @@ test("spectral forecasts preserve long-period swell, publish sets, and use NWS w
     const route = await import(`../app/api/conditions/route.ts?spectral=${Date.now()}`);
     const payload = await (await route.GET()).json();
     assert.equal(payload.mode, "live");
-    assert.match(payload.providers.mop.detail, /7 include forecast spectral partitions/);
+    assert.match(payload.providers.mop.detail, /8 include forecast spectral partitions/);
     assert.match(payload.providers.wind.detail, /North County: NWS/);
     const currentOb = payload.conditions.find((spot) => spot.name === "Ocean Beach");
     assert.equal(currentOb.windSource, "NWS");
@@ -755,6 +766,63 @@ test("each built run is archived with the raw values verification needs", async 
     assert.ok(pruned[0] < archived.issuedAt);
   } finally {
     delete globalThis.__FORECAST_CACHE_DB__;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("directional spread reduces the face a focused swell of the same size would build", async () => {
+  const { componentFaceFeet, profiles } = await import("../lib/forecast/model.ts");
+  const blacks = profiles.find((profile) => profile.name === "Blacks");
+  const base = { height: 1.5, period: 16, direction: blacks.swellTarget, band: "long" };
+
+  // r1 = 1 is a single ray. Anything lower is a spread sea of identical height.
+  const focused = componentFaceFeet(blacks, { ...base, coherence: 1 }, true);
+  const slightlySpread = componentFaceFeet(blacks, { ...base, coherence: 0.96 }, true);
+  const broad = componentFaceFeet(blacks, { ...base, coherence: 0.7 }, true);
+
+  assert.ok(focused > slightlySpread, "a spread sea must not build the same face as a focused one");
+  assert.ok(slightlySpread > broad, "the reduction must scale with spread");
+
+  // Absent spectra the component carries no coherence, and behaviour is unchanged.
+  assert.equal(componentFaceFeet(blacks, base, true), focused);
+
+  // The alignment term is exactly scaled by r1, not approximated.
+  const offset = { ...base, direction: (blacks.swellTarget + 40) % 360 };
+  const ratio = componentFaceFeet(blacks, { ...offset, coherence: 0.5 }, true)
+    / componentFaceFeet(blacks, { ...offset, coherence: 1 }, true);
+  const nearshoreFloor = 0.82;
+  const alignment = Math.cos(40 * Math.PI / 180);
+  const expected = (nearshoreFloor + 0.18 * alignment * 0.5) / (nearshoreFloor + 0.18 * alignment);
+  assert.ok(Math.abs(ratio - expected) < 1e-9, `exposure must scale exactly with r1 (got ${ratio}, expected ${expected})`);
+});
+
+test("a spectrum with unresolved bins is still used and stays frequency-aligned", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const healthy = tideScenarioFetch();
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      // Only the spectral request carries NaN bins, as CDIP does for sheltered points.
+      if (url.hostname === "thredds.cdip.ucsd.edu" && url.searchParams.getAll("var").includes("waveEnergyDensity")) {
+        return new Response(nanBinMopSpectralCsv(url.pathname.match(/(D\d{4})_forecast/)?.[1] ?? "D0000"));
+      }
+      return healthy(input);
+    };
+
+    const route = await import(`../app/api/conditions/route.ts?nan-bins=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+
+    // Dropping NaN entries would shorten the vector, fail the length check, and
+    // discard the whole spectrum, silently demoting the break to the regional fallback.
+    const spectral = payload.conditions.filter((item) => item.secondarySwellSource === "CDIP spectrum");
+    assert.ok(spectral.length > 0, "unresolved bins must not discard the entire spectrum");
+
+    // The surviving bins must keep their own frequencies. Energy sits in bands 13+,
+    // which are the short-period bins, so the resolved period must stay short.
+    const sample = spectral[0];
+    const period = Number(sample.period.replace(/[^\d.]/g, ""));
+    assert.ok(period > 0 && period < 9, `energy in high-frequency bins must resolve short-period, got ${sample.period}`);
+  } finally {
     globalThis.fetch = originalFetch;
   }
 });

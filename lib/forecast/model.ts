@@ -19,6 +19,16 @@ export type WaveComponent = {
   direction: number;
   period: number;
   band: "long" | "mid" | "short" | "bulk";
+  /**
+   * Directional coherence r1 = hypot(a1, b1), the mean resultant length of the
+   * directional distribution. 1 is a single ray, lower is more spread.
+   *
+   * For any directional distribution the energy-weighted mean of
+   * cos(theta - target) is exactly r1 * cos(mean - target), so this multiplies
+   * the alignment term rather than approximating it. Undefined when the
+   * spectrum is unavailable, which leaves the single-ray behaviour unchanged.
+   */
+  coherence?: number;
 };
 
 export type WaveEstimate = {
@@ -119,7 +129,10 @@ export function cardinal(degrees: number) {
 }
 
 export function componentFaceFeet(profile: Profile, component: WaveComponent, nearshore: boolean) {
-  const directionalFit = Math.max(0, Math.cos(angularDifference(component.direction, profile.swellTarget) * Math.PI / 180));
+  // A broad sea delivers less energy to a shore of fixed orientation than a
+  // focused swell of the same height, which a single mean direction cannot express.
+  const alignment = Math.cos(angularDifference(component.direction, profile.swellTarget) * Math.PI / 180);
+  const directionalFit = Math.max(0, alignment * (component.coherence ?? 1));
   const exposure = nearshore ? .82 + .18 * directionalFit : .42 + .58 * directionalFit;
   const periodResponse = Math.max(.85, Math.min(1.28, 1 + (component.period - 12) * .025));
   const calibratedResponse = profile.response?.[component.band] ?? 1;

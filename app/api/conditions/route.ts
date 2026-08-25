@@ -249,18 +249,42 @@ function formatTide(tide: TideEstimate) {
 }
 
 const mopFrequencies = [.04, .045, .05, .055, .06, .065, .07, .075, .08, .085, .09, .095, .1013, .11, .12, .13, .14, .15, .16, .17, .18, .19, .2, .21, .22, .23, .24, .25];
-const prioritySpectralSpots = new Set(["Trestles", "Swami’s", "Blacks", "Windansea", "Ocean Beach", "Sunset Cliffs", "Imperial Beach"]);
+// La Jolla Shores is included because it is the most sheltered break in the set
+// and carried roughly double every other break's error in the measured results,
+// which is what directional spread governs. See docs/forecast-verification.md.
+const prioritySpectralSpots = new Set(["Trestles", "Swami’s", "Blacks", "La Jolla Shores", "Windansea", "Ocean Beach", "Sunset Cliffs", "Imperial Beach"]);
 const mopBandwidths = mopFrequencies.map((frequency, index) => {
   const lower = index === 0 ? frequency - (mopFrequencies[1] - frequency) / 2 : (mopFrequencies[index - 1] + frequency) / 2;
   const upper = index === mopFrequencies.length - 1 ? frequency + (frequency - mopFrequencies[index - 1]) / 2 : (frequency + mopFrequencies[index + 1]) / 2;
   return upper - lower;
 });
 
-function parseNumberVector(value: string | undefined) {
-  return (value ?? "").trim().split(/\s+/).map(Number).filter(Number.isFinite);
+/**
+ * Parses a whitespace-separated spectral vector positionally.
+ *
+ * CDIP emits a literal `NaN` for frequency bins its model could not resolve,
+ * usually the lowest one or two. Dropping those entries shortens the vector and
+ * silently misaligns every later bin with its frequency, so unresolved bins are
+ * preserved as null and skipped individually instead.
+ */
+function parseBinVector(value: string | undefined): Array<number | null> {
+  return (value ?? "").trim().split(/\s+/).map((token) => {
+    const parsed = Number(token);
+    return Number.isFinite(parsed) ? parsed : null;
+  });
 }
 
-function spectralPartitions(energyDensity: number[], directions: number[], bulkHeight: number): WaveComponent[] {
+function spectralPartitions(
+  energyDensity: Array<number | null>,
+  directions: Array<number | null>,
+  bulkHeight: number,
+  a1?: Array<number | null>,
+  b1?: Array<number | null>,
+): WaveComponent[] {
+  // CDIP's a1/b1 are in the same convention as waveMeanDirection: atan2(b1, a1)
+  // reproduces it exactly. Using them instead of unit vectors keeps the direction
+  // and additionally preserves the magnitude, which is the coherence.
+  const directional = a1?.length === mopFrequencies.length && b1?.length === mopFrequencies.length;
   const groups: Array<{ band: WaveComponent["band"]; minimumPeriod: number; maximumPeriod: number }> = [
     { band: "long", minimumPeriod: 14, maximumPeriod: Number.POSITIVE_INFINITY },
     { band: "mid", minimumPeriod: 9, maximumPeriod: 14 },
@@ -269,16 +293,22 @@ function spectralPartitions(energyDensity: number[], directions: number[], bulkH
   const components = groups.flatMap(({ band, minimumPeriod, maximumPeriod }) => {
     const bins = mopFrequencies.map((frequency, index) => ({
       period: 1 / frequency,
-      direction: directions[index],
+      direction: directions[index] ?? Number.NaN,
+      // Unit vectors when only a mean direction is available; the true Fourier
+      // pair when it is not, so a spread band contributes a shorter vector.
+      x: directional ? a1![index] ?? Number.NaN : Math.cos((directions[index] ?? Number.NaN) * Math.PI / 180),
+      y: directional ? b1![index] ?? Number.NaN : Math.sin((directions[index] ?? Number.NaN) * Math.PI / 180),
       energy: Math.max(0, energyDensity[index] ?? 0) * mopBandwidths[index],
-    })).filter((bin) => bin.period >= minimumPeriod && bin.period < maximumPeriod && inRange(bin.direction, 0, 360) && bin.energy > 0);
+    })).filter((bin) => bin.period >= minimumPeriod && bin.period < maximumPeriod && inRange(bin.direction, 0, 360)
+      && Number.isFinite(bin.x) && Number.isFinite(bin.y) && bin.energy > 0);
     const energy = bins.reduce((sum, bin) => sum + bin.energy, 0);
     if (energy < .0001) return [];
     const period = bins.reduce((sum, bin) => sum + bin.period * bin.energy, 0) / energy;
-    const x = bins.reduce((sum, bin) => sum + Math.cos(bin.direction * Math.PI / 180) * bin.energy, 0);
-    const y = bins.reduce((sum, bin) => sum + Math.sin(bin.direction * Math.PI / 180) * bin.energy, 0);
+    const x = bins.reduce((sum, bin) => sum + bin.x * bin.energy, 0);
+    const y = bins.reduce((sum, bin) => sum + bin.y * bin.energy, 0);
     const direction = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-    return [{ height: 4 * Math.sqrt(energy), period, direction, band } satisfies WaveComponent];
+    const coherence = directional ? Math.max(0, Math.min(1, Math.hypot(x, y) / energy)) : undefined;
+    return [{ height: 4 * Math.sqrt(energy), period, direction, band, ...(coherence == null ? {} : { coherence }) } satisfies WaveComponent];
   });
   const spectralHeight = Math.sqrt(components.reduce((sum, component) => sum + component.height ** 2, 0));
   const scale = spectralHeight > .05 && bulkHeight > 0 ? bulkHeight / spectralHeight : 1;
@@ -298,7 +328,7 @@ async function fetchMopForecast(profile: Profile) {
     return url.toString();
   };
   const spectralPromise = prioritySpectralSpots.has(profile.name)
-    ? fetchText(`CDIP MOP spectrum ${profile.mopId}`, requestUrl(["waveEnergyDensity", "waveMeanDirection"]), 8_000).catch(() => null)
+    ? fetchText(`CDIP MOP spectrum ${profile.mopId}`, requestUrl(["waveEnergyDensity", "waveMeanDirection", "waveA1Value", "waveB1Value"]), 8_000).catch(() => null)
     : Promise.resolve(null);
   const [text, spectralText] = await Promise.all([
     fetchText(`CDIP MOP ${profile.mopId}`, requestUrl(["waveHs", "waveTp", "waveDp"])),
@@ -311,7 +341,7 @@ async function fetchMopForecast(profile: Profile) {
   const heightColumn = column("waveHs");
   const periodColumn = column("waveTp");
   const directionColumn = column("waveDp");
-  const spectralByTime = new Map<string, { energy: number[]; directions: number[] }>();
+  const spectralByTime = new Map<string, { energy: Array<number | null>; directions: Array<number | null>; a1?: Array<number | null>; b1?: Array<number | null> }>();
   if (spectralText) {
     const spectralRows = parseCsvRows(spectralText);
     const spectralHeader = spectralRows[0]?.map((value) => value.replace(/\s*\[.*$/, "")) ?? [];
@@ -319,9 +349,13 @@ async function fetchMopForecast(profile: Profile) {
     const energyColumn = spectralHeader.indexOf("waveEnergyDensity");
     const meanDirectionColumn = spectralHeader.indexOf("waveMeanDirection");
     if ([spectralTimeColumn, energyColumn, meanDirectionColumn].every((index) => index >= 0)) {
+      const a1Column = spectralHeader.indexOf("waveA1Value");
+      const b1Column = spectralHeader.indexOf("waveB1Value");
       spectralRows.slice(1).forEach((row) => spectralByTime.set(row[spectralTimeColumn], {
-        energy: parseNumberVector(row[energyColumn]),
-        directions: parseNumberVector(row[meanDirectionColumn]),
+        energy: parseBinVector(row[energyColumn]),
+        directions: parseBinVector(row[meanDirectionColumn]),
+        a1: a1Column >= 0 ? parseBinVector(row[a1Column]) : undefined,
+        b1: b1Column >= 0 ? parseBinVector(row[b1Column]) : undefined,
       }));
     }
   }
@@ -338,7 +372,7 @@ async function fetchMopForecast(profile: Profile) {
       period: Number(row[periodColumn]),
       direction: Number(row[directionColumn]),
       components: energyDensity.length === mopFrequencies.length && meanDirections.length === mopFrequencies.length
-        ? spectralPartitions(energyDensity, meanDirections, height)
+        ? spectralPartitions(energyDensity, meanDirections, height, spectral?.a1, spectral?.b1)
         : [],
     };
   }).filter((row) => row.time && inRange(row.height, 0, 20) && inRange(row.period, 2, 35) && inRange(row.direction, 0, 360));
