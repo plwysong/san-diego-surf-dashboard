@@ -78,13 +78,17 @@ function alignWeatherToMarine(marineTimes: string[], weather: HourlyData) {
     const index = byTime.get(time);
     return index == null ? null : weather.wind_direction_10m?.[index] ?? null;
   });
+  const gusts = marineTimes.map((time) => {
+    const index = byTime.get(time);
+    return index == null ? null : weather.wind_gusts_10m?.[index] ?? null;
+  });
   const current = nearestTimeIndex(marineTimes, localNowKey(), 2);
   const days = current < 0 ? [] : displayedDayIndexes(marineTimes, current);
   const coherent = (index: number) => typeof windSpeed[index] === "number" && Number.isFinite(windSpeed[index])
     && typeof windDirection[index] === "number" && Number.isFinite(windDirection[index]);
   const usable = current >= 0 && coherent(current) && days.length === 5
     && days.every(([, indexes]) => indexes.filter(coherent).length >= indexes.length * .8);
-  return { usable, hourly: { time: marineTimes, wind_speed_10m: windSpeed, wind_direction_10m: windDirection } satisfies HourlyData };
+  return { usable, hourly: { time: marineTimes, wind_speed_10m: windSpeed, wind_direction_10m: windDirection, wind_gusts_10m: gusts } satisfies HourlyData };
 }
 
 function localNowKey() {
@@ -241,6 +245,15 @@ function closestTide(predictions: TidePrediction[], time: string): TideEstimate 
   const delta = upperValue - lowerValue;
   const trend = lowerMs === upperMs ? null : Math.abs(delta) < .03 ? "steady" : delta > 0 ? "rising" : "falling";
   return { value, trend };
+}
+
+function formatWind(speed: number | null, direction: number | null, gust: number | null) {
+  if (speed == null || direction == null) return "Forecast unavailable";
+  const mean = Math.round(speed);
+  const gusting = gust == null ? null : Math.round(gust);
+  return gusting != null && gusting > mean
+    ? `${mean} kt ${cardinal(direction)} · gusts ${gusting}`
+    : `${mean} kt ${cardinal(direction)}`;
 }
 
 function formatTide(tide: TideEstimate) {
@@ -639,6 +652,8 @@ function rawForecastRecord(
   windSpeed: number | null,
   windDirection: number | null,
   tideFt: number | null,
+  windGust: number | null = null,
+  tideResidualFt: number | null = null,
 ) {
   return {
     validAt: localForecastTimeToIso(localTime),
@@ -648,7 +663,10 @@ function rawForecastRecord(
     directionDeg: wave.direction,
     windKt: windSpeed,
     windDeg: windDirection,
+    windGustKt: windGust,
     tideFt,
+    // The correction already folded into tideFt, kept so it can be undone.
+    tideResidualFt,
     nearshore: wave.nearshore,
     mopId: profile.mopId,
     // Captured for later use. Unstored runs are unrecoverable, and these have no
@@ -725,7 +743,7 @@ async function fetchZones() {
   const weatherUrl = new URL("https://api.open-meteo.com/v1/forecast");
   weatherUrl.searchParams.set("latitude", windPoints.map((point) => point.lat).join(","));
   weatherUrl.searchParams.set("longitude", windPoints.map((point) => point.lon).join(","));
-  weatherUrl.searchParams.set("hourly", "wind_speed_10m,wind_direction_10m");
+  weatherUrl.searchParams.set("hourly", "wind_speed_10m,wind_direction_10m,wind_gusts_10m");
   weatherUrl.searchParams.set("wind_speed_unit", "kn");
   weatherUrl.searchParams.set("timezone", windPoints.map(() => "America/Los_Angeles").join(","));
   weatherUrl.searchParams.set("forecast_days", "6");
@@ -791,6 +809,69 @@ async function fetchTides(station: string) {
     && closestTide(predictions, finalDisplayedHour).value != null
     && !hasLargeGap;
   return { predictions, complete } satisfies TideFeed;
+}
+
+type TideResidual = { feet: number; observedKey: string; hours: number };
+
+/**
+ * Non-tidal residual: how far the measured water level sits from the harmonic
+ * prediction. Storm surge, atmospheric pressure and seasonal steric effects all
+ * land here, and the dashboard otherwise uses predictions alone.
+ */
+async function fetchTideResidual(station: string): Promise<TideResidual> {
+  const stamp = (date: Date) => `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, "0")}${String(date.getUTCDate()).padStart(2, "0")} ${String(date.getUTCHours()).padStart(2, "0")}:00`;
+  const now = new Date();
+  const start = new Date(now.getTime() - 18 * 60 * 60 * 1000);
+  const url = (product: string) => {
+    const target = new URL("https://api.tidesandcurrents.noaa.gov/api/prod/datagetter");
+    target.searchParams.set("product", product);
+    target.searchParams.set("application", "SanDiegoSurfDashboard");
+    target.searchParams.set("begin_date", stamp(start));
+    target.searchParams.set("end_date", stamp(now));
+    target.searchParams.set("datum", "MLLW");
+    target.searchParams.set("station", station);
+    target.searchParams.set("time_zone", "lst_ldt");
+    target.searchParams.set("units", "english");
+    target.searchParams.set("interval", "h");
+    target.searchParams.set("format", "json");
+    return target.toString();
+  };
+
+  const [observed, predicted] = await Promise.all([
+    fetchJson<{ data?: Array<{ t: string; v: string }> }>(`NOAA water level ${station}`, url("water_level")),
+    fetchJson<{ predictions?: TidePrediction[] }>(`NOAA tide predictions ${station}`, url("predictions")),
+  ]);
+
+  const predictionByTime = new Map((predicted.predictions ?? []).map((item) => [item.t, Number(item.v)]));
+  const residuals = (observed.data ?? []).flatMap((item) => {
+    const measured = Number(item.v);
+    const harmonic = predictionByTime.get(item.t);
+    return Number.isFinite(measured) && harmonic != null && Number.isFinite(harmonic) ? [{ t: item.t, residual: measured - harmonic }] : [];
+  });
+  if (residuals.length < 4) throw new Error(`NOAA water level ${station}: too few matched hours`);
+
+  const feet = residuals.reduce((sum, item) => sum + item.residual, 0) / residuals.length;
+  // A residual this large is a datum or units problem, not weather.
+  if (!inRange(feet, -6, 6)) throw new Error(`NOAA water level ${station}: implausible residual`);
+  return { feet, observedKey: residuals.at(-1)!.t.replace(" ", "T"), hours: residuals.length };
+}
+
+/**
+ * Carries the measured residual forward onto the harmonic predictions, decaying
+ * with lead time. Mirrors how observed wind already corrects forecast wind.
+ * The 24-hour e-folding is a modelling choice: under-applying a persistent
+ * offset is safer than over-applying a transient surge.
+ */
+function applyTideResidual(predictions: TidePrediction[], residual: TideResidual | null) {
+  if (!residual) return predictions;
+  const observedMs = pseudoLocalMs(residual.observedKey);
+  if (!Number.isFinite(observedMs)) return predictions;
+  return predictions.map((prediction) => {
+    const value = Number(prediction.v);
+    if (!Number.isFinite(value)) return prediction;
+    const leadHours = Math.max(0, (pseudoLocalMs(prediction.t.replace(" ", "T")) - observedMs) / 3_600_000);
+    return { ...prediction, v: String(value + residual.feet * Math.exp(-leadHours / 24)) };
+  });
 }
 
 async function fetchBuoy() {
@@ -879,6 +960,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
   windLive: boolean;
   regionalLive: boolean;
   windSource: ZoneForecast["windSource"];
+  tideResidualFt?: number | null;
 }) {
   const candidates = marine.time.map((time, index) => ({ time, index }))
     .filter(({ time, index }) => time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19
@@ -945,7 +1027,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
     period: `${Math.round(wave.period)}s`,
     secondarySwell: secondarySwellAt(wave),
     secondarySwellSource: wave.componentSource,
-    wind: windSpeed == null || windDirection == null ? "Forecast unavailable" : `${Math.round(windSpeed)} kt ${cardinal(windDirection)}`,
+    wind: formatWind(windSpeed, windDirection, weather.wind_gusts_10m?.[index] ?? null),
     windSource: context.windSource,
     tide: formatTide(tide),
     water: waterF == null ? "—" : `${waterF}°`,
@@ -956,7 +1038,8 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
     forecastSkill: "Not measured",
     modelPoint: wave.nearshore ? profile.mopId : "Regional fallback",
     summary: conditionSummary(profile, wave.period, windSpeed, windDirection, tide.value),
-    raw: rawForecastRecord(profile, wave, marine.time[index], windSpeed, windDirection, tide.value),
+    raw: rawForecastRecord(profile, wave, marine.time[index], windSpeed, windDirection, tide.value,
+      weather.wind_gusts_10m?.[index] ?? null, context.tideResidualFt ?? null),
     hourly: chartIndexes.map((hourIndex) => ({
       time: formatHour(marine.time[hourIndex]),
       height: (() => {
@@ -971,7 +1054,7 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
 
 async function buildPayload() {
   const zones = Object.keys(zonePoints) as Zone[];
-  const [regionalForecastResult, laJollaTideResult, sanDiegoTideResult, buoyResult, cdipResult, spectrumResult, windObservationResult, nwsWindResult, mopResults] = await Promise.all([
+  const [regionalForecastResult, laJollaTideResult, sanDiegoTideResult, buoyResult, cdipResult, spectrumResult, windObservationResult, nwsWindResult, mopResults, laJollaResidualResult, sanDiegoResidualResult] = await Promise.all([
     fetchZones().then((value) => ({ ok: true as const, value })).catch((error) => {
       console.error(`[conditions] Open-Meteo batch unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
       return { ok: false as const, value: { zones: new Map<Zone, ZoneForecast>(), spotWinds: new Map<string, HourlyData>() } satisfies ForecastBundle };
@@ -999,10 +1082,18 @@ async function buildPayload() {
       return { ok: false, value: new Map<Zone, HourlyData>() };
     }),
     settledMapWithConcurrency(profiles, 4, fetchMopForecast),
+    fetchTideResidual("9410230").then((value) => ({ ok: true as const, value })).catch((error) => {
+      console.error(`[conditions] La Jolla water level residual unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
+      return { ok: false as const, value: null };
+    }),
+    fetchTideResidual("9410170").then((value) => ({ ok: true as const, value })).catch((error) => {
+      console.error(`[conditions] San Diego water level residual unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
+      return { ok: false as const, value: null };
+    }),
   ]);
 
-  const laJollaTides = laJollaTideResult.value;
-  const sanDiegoTides = sanDiegoTideResult.value;
+  const laJollaTides = applyTideResidual(laJollaTideResult.value, laJollaResidualResult.value);
+  const sanDiegoTides = applyTideResidual(sanDiegoTideResult.value, sanDiegoResidualResult.value);
 
   const mopBySpot = new Map<string, HourlyData>();
   mopResults.forEach((result, index) => {
@@ -1110,7 +1201,7 @@ async function buildPayload() {
       period: `${Math.round(wave.period)}s`,
       secondarySwell: secondarySwellAt(wave),
       secondarySwellSource: wave.componentSource,
-      wind: windSpeed == null || windDirection == null ? "Forecast unavailable" : `${Math.round(windSpeed)} kt ${cardinal(windDirection)}`,
+      wind: formatWind(windSpeed, windDirection, data.weather.wind_gusts_10m?.[index] ?? null),
       windSource: data.windSource,
       tide: formatTide(tide),
       water: waterF == null ? "—" : `${waterF}°`,
@@ -1121,7 +1212,9 @@ async function buildPayload() {
       forecastSkill: "Not measured",
       modelPoint: wave.nearshore ? profile.mopId : "Regional fallback",
       summary: conditionSummary(profile, wave.period, windSpeed, windDirection, tide.value),
-      raw: rawForecastRecord(profile, wave, data.marine.time[index], windSpeed, windDirection, tide.value),
+      raw: rawForecastRecord(profile, wave, data.marine.time[index], windSpeed, windDirection, tide.value,
+        data.weather.wind_gusts_10m?.[index] ?? null,
+        (profile.zone === "South Bay" ? sanDiegoResidualResult.value : laJollaResidualResult.value)?.feet ?? null),
       hourly: buildSpotHourly(profile, data.marine, data.weather, tides, index, mop),
     }];
   });
@@ -1159,6 +1252,7 @@ async function buildPayload() {
       windLive: data.windLive,
       regionalLive: data.regionalLive,
       windSource: data.windSource,
+      tideResidualFt: (profile.zone === "South Bay" ? sanDiegoResidualResult.value : laJollaResidualResult.value)?.feet ?? null,
     });
     return forecast ? [forecast] : [];
   })]));
@@ -1198,6 +1292,17 @@ async function buildPayload() {
     marine: { ok: regionalMarineLiveCount === 3, detail: `${regionalMarineLiveCount}/3 regional forecast zones have complete five-day wave coverage; ${regionalSecondaryCount}/${regionalMarineLiveCount || 3} include coherent secondary-swell components${regionalMarineLiveCount === 3 ? "" : `; CDIP nearshore forecasts cover ${liveZones}/3 zones`}`, checkedAt: generatedAt, validThrough: marineValidThrough },
     wind: { ok: allWindLive && completeCurrentWindCoverage, detail: `${windLiveCount}/${profiles.length} break forecasts have wind · ${spotScaleWindCount}/${profiles.length} use spot-scale Open-Meteo guidance · ${zones.map((zone) => `${zone}: ${zoneData.get(zone)?.windSource ?? "Unavailable"}`).join("; ")}; remaining healthy breaks use isolated zone or NWS fallback${allWindLive && completeCurrentWindCoverage ? "" : "; missing wind is shown as unavailable, never fabricated"}`, checkedAt: generatedAt, validThrough: windValidThrough },
     windObservation: { ok: centralWindAdjusted, detail: centralWindAdjusted ? "La Jolla observation adjusts Central County wind only, with time decay" : "Using uncorrected forecast wind", checkedAt: generatedAt, dataTimestamp: windObservationResult.value?.observedAt },
+    waterLevel: {
+      ok: laJollaResidualResult.ok || sanDiegoResidualResult.ok,
+      detail: [laJollaResidualResult.value, sanDiegoResidualResult.value].some(Boolean)
+        ? `Measured water level differs from prediction by ${[
+            laJollaResidualResult.value ? `${laJollaResidualResult.value.feet >= 0 ? "+" : ""}${laJollaResidualResult.value.feet.toFixed(2)} ft at La Jolla` : null,
+            sanDiegoResidualResult.value ? `${sanDiegoResidualResult.value.feet >= 0 ? "+" : ""}${sanDiegoResidualResult.value.feet.toFixed(2)} ft at San Diego` : null,
+          ].filter(Boolean).join(" and ")}; carried forward with decay`
+        : "Using harmonic predictions without a measured correction",
+      checkedAt: generatedAt,
+      dataTimestamp: laJollaResidualResult.value?.observedKey ?? sanDiegoResidualResult.value?.observedKey,
+    },
     tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations have complete five-day coverage; unbracketed hours are unavailable`, checkedAt: generatedAt, validThrough: tideValidThrough },
     buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 fallback observation live" : "CDIP observations are primary", checkedAt: generatedAt, dataTimestamp: buoyResult.value?.observedAt },
   };

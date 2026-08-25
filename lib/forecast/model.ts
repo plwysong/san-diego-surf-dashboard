@@ -65,6 +65,7 @@ export type HourlyData = {
   secondary_swell_wave_period?: Array<number | null>;
   wind_speed_10m?: Array<number | null>;
   wind_direction_10m?: Array<number | null>;
+  wind_gusts_10m?: Array<number | null>;
   spectral_components?: WaveComponent[][];
 };
 

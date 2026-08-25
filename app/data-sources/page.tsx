@@ -56,6 +56,12 @@ const providerInfo = {
     href: "https://tidesandcurrents.noaa.gov/met.html?id=9410230",
     link: "La Jolla meteorological observations",
   },
+  waterLevel: {
+    name: "NOAA Observed Water Level",
+    role: "Measured water level compared against the harmonic prediction. The difference is storm surge, pressure and seasonal effects, and is carried forward onto the tide forecast with decay rather than being ignored.",
+    href: "https://tidesandcurrents.noaa.gov/waterlevels.html?id=9410230",
+    link: "La Jolla water levels",
+  },
   tides: {
     name: "NOAA CO-OPS",
     role: "Hourly tide predictions from La Jolla and San Diego, validated across all five displayed days and interpolated only between nearby source hours.",

@@ -826,3 +826,76 @@ test("a spectrum with unresolved bins is still used and stays frequency-aligned"
     globalThis.fetch = originalFetch;
   }
 });
+
+test("a measured water level offset corrects the tide forecast and is never invented", async () => {
+  const originalFetch = globalThis.fetch;
+  const OFFSET = 0.8;
+
+  // Observed water level sits a fixed distance above the harmonic prediction.
+  const withWaterLevel = (offset) => {
+    const healthy = tideScenarioFetch();
+    return async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "api.tidesandcurrents.noaa.gov" && url.searchParams.get("product") === "water_level") {
+        if (offset == null) return Response.json({ error: { message: "no data" } });
+        return Response.json({ data: tideRows(2.5 + offset).map((row) => ({ t: row.t, v: row.v })) });
+      }
+      return healthy(input);
+    };
+  };
+
+  const tideOf = async (fetchImpl, tag) => {
+    globalThis.fetch = fetchImpl;
+    const route = await import(`../app/api/conditions/route.ts?${tag}=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+    const blacks = payload.conditions.find((item) => item.name === "Blacks");
+    return { payload, blacks, tide: Number(blacks.tide.replace(/[^\d.-]/g, "")) };
+  };
+
+  try {
+    const corrected = await tideOf(withWaterLevel(OFFSET), "residual");
+    const uncorrected = await tideOf(withWaterLevel(null), "no-residual");
+
+    // Predictions are a flat 2.5 ft, so the correction is directly visible.
+    assert.ok(Math.abs(uncorrected.tide - 2.5) < 0.05, `uncorrected tide should track the prediction, got ${uncorrected.tide}`);
+    assert.ok(corrected.tide > uncorrected.tide, "a measured offset must move the tide forecast");
+    assert.ok(corrected.tide - uncorrected.tide <= OFFSET + 0.01, "the correction must never exceed what was measured");
+
+    // Archived so the correction can be undone later.
+    assert.ok(Math.abs(corrected.blacks.raw.tideResidualFt - OFFSET) < 0.05);
+    assert.equal(uncorrected.blacks.raw.tideResidualFt, null);
+
+    // With no observation the harmonic prediction is used unchanged, not guessed at.
+    assert.equal(uncorrected.payload.providers.waterLevel.ok, false);
+    assert.match(uncorrected.payload.providers.waterLevel.detail, /without a measured correction/);
+    assert.equal(corrected.payload.providers.waterLevel.ok, true);
+    assert.match(corrected.payload.providers.waterLevel.detail, /differs from prediction/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("wind gusts are shown only when they exceed the mean, and are archived", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const healthy = tideScenarioFetch();
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "api.open-meteo.com") {
+        const weather = { hourly: { time: times, wind_speed_10m: filled(4), wind_direction_10m: filled(80), wind_gusts_10m: filled(11) } };
+        return Response.json([weather, weather, weather]);
+      }
+      return healthy(input);
+    };
+
+    const route = await import(`../app/api/conditions/route.ts?gusts=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+    const blacks = payload.conditions.find((item) => item.name === "Blacks");
+
+    assert.match(blacks.wind, /gusts 11/, "a gust above the mean must be shown");
+    assert.match(blacks.wind, /^4 kt/, "the mean is still the headline figure");
+    assert.equal(blacks.raw.windGustKt, 11);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
