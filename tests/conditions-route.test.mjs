@@ -899,3 +899,67 @@ test("wind gusts are shown only when they exceed the mean, and are archived", as
     globalThis.fetch = originalFetch;
   }
 });
+
+test("surfable hours follow sunrise and sunset instead of a fixed window", async () => {
+  const originalFetch = globalThis.fetch;
+
+  // Dates spanned by the fixture, so every forecast day gets a window.
+  const dates = [...new Set(times.map((time) => time.slice(0, 10)))];
+  const daily = (sunrise, sunset) => ({
+    time: dates,
+    sunrise: dates.map((date) => `${date}T${sunrise}`),
+    sunset: dates.map((date) => `${date}T${sunset}`),
+  });
+
+  const run = async (dailyBlock, tag) => {
+    const healthy = tideScenarioFetch();
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "api.open-meteo.com") {
+        const weather = {
+          hourly: { time: times, wind_speed_10m: filled(4), wind_direction_10m: filled(80), wind_gusts_10m: filled(5) },
+          ...(dailyBlock ? { daily: dailyBlock } : {}),
+        };
+        return Response.json([weather, weather, weather]);
+      }
+      return healthy(input);
+    };
+    const route = await import(`../app/api/conditions/route.ts?daylight-${tag}=${Date.now()}`);
+    return (await route.GET()).json();
+  };
+
+  const hoursOf = (payload, name) => {
+    const spot = payload.conditions.find((item) => item.name === name);
+    return spot.hourly.map((point) => {
+      const [, value, meridiem] = point.time.match(/^(\d+)\s*(AM|PM)$/);
+      const hour = Number(value) % 12;
+      return meridiem === "PM" ? hour + 12 : hour;
+    });
+  };
+
+  try {
+    // A short winter day: sunrise 07:46, sunset 17:45.
+    const winter = await run(daily("07:46", "17:45"), "winter");
+    const winterHours = hoursOf(winter, "Blacks");
+    assert.ok(winterHours.length > 0, "a winter day must still produce hours");
+    assert.ok(Math.min(...winterHours) >= 7, `no hour before sunrise, got ${Math.min(...winterHours)}`);
+    assert.ok(Math.max(...winterHours) <= 17, `no hour after sunset, got ${Math.max(...winterHours)}`);
+    assert.equal(winter.providers.daylight.ok, true);
+    assert.match(winter.providers.daylight.detail, /07:46 to 17:45/);
+    assert.ok(winter.daylight.length > 0, "the window is published for display");
+
+    // Without sunrise data the previous fixed window is assumed, and said so.
+    const assumed = await run(null, "assumed");
+    assert.equal(assumed.providers.daylight.ok, false);
+    assert.match(assumed.providers.daylight.detail, /assuming 5am to 7pm/);
+    const assumedHours = hoursOf(assumed, "Blacks");
+    assert.ok(Math.min(...assumedHours) >= 5 && Math.max(...assumedHours) <= 19);
+
+    // The winter window must be strictly tighter than the assumed one.
+    assert.ok(Math.min(...winterHours) > Math.min(...assumedHours)
+      || Math.max(...winterHours) < Math.max(...assumedHours),
+      "real daylight must narrow the window relative to the fixed assumption");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

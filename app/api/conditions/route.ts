@@ -24,7 +24,47 @@ import {
 import { fetchJson, fetchText, inRange, isFresh, parseCsvRows, settledMapWithConcurrency } from "../../../lib/forecast/providers.ts";
 
 type ForecastMode = "live" | "partial" | "unavailable";
-type ForecastResponse = { hourly?: HourlyData; error?: boolean; reason?: string };
+type ForecastResponse = {
+  hourly?: HourlyData;
+  daily?: { time?: string[]; sunrise?: string[]; sunset?: string[] };
+  error?: boolean;
+  reason?: string;
+};
+type DaylightWindow = { startHour: number; endHour: number; sunrise: string; sunset: string };
+type DaylightByDate = Map<string, DaylightWindow>;
+
+/**
+ * Fallback when sunrise times are unavailable. This was previously hardcoded
+ * everywhere, which treats 5am and 7pm as surfable year round. On the winter
+ * solstice San Diego sunrise is 07:46 and sunset 17:45, so a third of that
+ * window is dark and a best window could be recommended after nightfall.
+ */
+const ASSUMED_DAYLIGHT: DaylightWindow = { startHour: 5, endHour: 19, sunrise: "", sunset: "" };
+
+/** The hour containing sunrise counts, so dawn patrol is not excluded. */
+function parseDaylight(daily: ForecastResponse["daily"]): DaylightByDate {
+  const byDate: DaylightByDate = new Map();
+  (daily?.time ?? []).forEach((date, index) => {
+    const sunrise = daily?.sunrise?.[index];
+    const sunset = daily?.sunset?.[index];
+    if (!sunrise || !sunset) return;
+    const startHour = Number(sunrise.slice(11, 13));
+    const endHour = Number(sunset.slice(11, 13));
+    if (!Number.isFinite(startHour) || !Number.isFinite(endHour) || endHour <= startHour) return;
+    byDate.set(date, { startHour, endHour, sunrise, sunset });
+  });
+  return byDate;
+}
+
+function daylightFor(daylight: DaylightByDate | undefined, dateKey: string) {
+  return daylight?.get(dateKey) ?? ASSUMED_DAYLIGHT;
+}
+
+function isDaylightHour(daylight: DaylightByDate | undefined, time: string) {
+  const window = daylightFor(daylight, time.slice(0, 10));
+  const hour = Number(time.slice(11, 13));
+  return hour >= window.startHour && hour <= window.endHour;
+}
 type TidePrediction = { t: string; v: string; type?: string };
 type TideEstimate = { value: number | null; trend: "steady" | "rising" | "falling" | null };
 type TideFeed = { predictions: TidePrediction[]; complete: boolean };
@@ -33,7 +73,7 @@ type SpectrumComponent = { period: number; direction: number; heightM: number; e
 type CdipSpectrum = { observedAt: string; station: string; components: SpectrumComponent[] };
 type CoastalWind = { observedAt: string; station: string; speed: number; direction: number };
 type ZoneForecast = { marine: HourlyData; weather: HourlyData; windLive: boolean; regionalLive: boolean; windSource: "Open-Meteo" | "NWS" | "Unavailable" };
-type ForecastBundle = { zones: Map<Zone, ZoneForecast>; spotWinds: Map<string, HourlyData> };
+type ForecastBundle = { zones: Map<Zone, ZoneForecast>; spotWinds: Map<string, HourlyData>; daylight: DaylightByDate };
 
 export function displayedDayIndexes(times: string[], start: number) {
   const byDate = new Map<string, number[]>();
@@ -152,14 +192,15 @@ function formatWindow(times: string[], startIndex: number, endIndex: number) {
   return startIndex === endIndex ? `Around ${start}` : `${start}–${end}`;
 }
 
-function surfableIndexes(times: string[], start: number, count: number) {
+function surfableIndexes(times: string[], start: number, count: number, daylight?: DaylightByDate) {
   const startDate = times[start]?.slice(0, 10);
-  const startHour = Number(times[start]?.slice(11, 13));
-  const targetDate = startHour > 19
-    ? times.slice(start).find((time) => Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19)?.slice(0, 10)
+  const afterDark = times[start] != null && !isDaylightHour(daylight, times[start])
+    && Number(times[start].slice(11, 13)) > daylightFor(daylight, startDate).endHour;
+  const targetDate = afterDark
+    ? times.slice(start).find((time) => isDaylightHour(daylight, time))?.slice(0, 10)
     : startDate;
   return times.map((time, index) => ({ time, index }))
-    .filter(({ time, index }) => index >= start && time.slice(0, 10) === targetDate && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19)
+    .filter(({ time, index }) => index >= start && time.slice(0, 10) === targetDate && isDaylightHour(daylight, time))
     .slice(0, count).map(({ index }) => index);
 }
 
@@ -188,8 +229,8 @@ function bestWindowSelection(candidates: number[], times: string[], scores: numb
   };
 }
 
-function bestWindow(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], start: number, mop?: HourlyData) {
-  const candidates = surfableIndexes(marine.time, start, 12);
+function bestWindow(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], start: number, mop?: HourlyData, daylight?: DaylightByDate) {
+  const candidates = surfableIndexes(marine.time, start, 12, daylight);
   if (!candidates.length) return { label: "No daylight window", score: 0 };
   const scored = candidates.flatMap((index) => {
     const wave = waveAt(profile, marine, index, mop);
@@ -205,8 +246,8 @@ function bestWindow(profile: Profile, marine: HourlyData, weather: HourlyData, t
   return { label: formatWindow(marine.time, selection.startIndex, selection.endIndex), score: selection.score };
 }
 
-function buildSpotHourly(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], start: number, mop?: HourlyData) {
-  return surfableIndexes(marine.time, start, 7).flatMap((index) => {
+function buildSpotHourly(profile: Profile, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], start: number, mop?: HourlyData, daylight?: DaylightByDate) {
+  return surfableIndexes(marine.time, start, 7, daylight).flatMap((index) => {
     const wave = waveAt(profile, marine, index, mop);
     if (!wave) return [];
     const wind = weather.wind_speed_10m?.[index] ?? null;
@@ -744,6 +785,7 @@ async function fetchZones() {
   weatherUrl.searchParams.set("latitude", windPoints.map((point) => point.lat).join(","));
   weatherUrl.searchParams.set("longitude", windPoints.map((point) => point.lon).join(","));
   weatherUrl.searchParams.set("hourly", "wind_speed_10m,wind_direction_10m,wind_gusts_10m");
+  weatherUrl.searchParams.set("daily", "sunrise,sunset");
   weatherUrl.searchParams.set("wind_speed_unit", "kn");
   weatherUrl.searchParams.set("timezone", windPoints.map(() => "America/Los_Angeles").join(","));
   weatherUrl.searchParams.set("forecast_days", "6");
@@ -775,7 +817,9 @@ async function fetchZones() {
     const weather = weatherResponses[zones.length + index]?.hourly;
     if (weather?.time?.length) spotWinds.set(profile.name, weather);
   });
-  return { zones: forecasts, spotWinds } satisfies ForecastBundle;
+  // Sunrise varies by under a minute across the county, so one map serves every break.
+  const daylight = parseDaylight(weatherResponses.find((response) => response?.daily?.sunrise?.length)?.daily);
+  return { zones: forecasts, spotWinds, daylight } satisfies ForecastBundle;
 }
 
 async function fetchTides(station: string) {
@@ -910,17 +954,17 @@ async function fetchBuoy() {
   return observation;
 }
 
-function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], mop?: HourlyData, leadProfile?: Profile) {
+function buildZoneSeries(zone: Zone, marine: HourlyData, weather: HourlyData, tides: TidePrediction[], mop?: HourlyData, leadProfile?: Profile, daylight?: DaylightByDate) {
   const profile = leadProfile ?? profiles.find((item) => item.name === zoneLeadSpot[zone])!;
   const start = currentIndex(marine.time);
   if (start < 0) return { hourly: [], days: [] };
-  const hourly = buildSpotHourly(profile, marine, weather, tides, start, mop);
+  const hourly = buildSpotHourly(profile, marine, weather, tides, start, mop, daylight);
 
   const today = marine.time[start]?.slice(0, 10);
   const uniqueDates = displayedDayIndexes(marine.time, start).map(([date]) => date);
   const days = uniqueDates.flatMap((date) => {
     const indexes = marine.time.map((time, index) => ({ time, index }))
-      .filter(({ time, index }) => index >= start && time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19)
+      .filter(({ time, index }) => index >= start && time.startsWith(date) && isDaylightHour(daylight, time))
       .map(({ index }) => index);
     const scored = indexes.flatMap((index) => {
       const hourWave = waveAt(profile, marine, index, mop);
@@ -961,9 +1005,11 @@ function buildDailySpot(profile: Profile, marine: HourlyData, weather: HourlyDat
   regionalLive: boolean;
   windSource: ZoneForecast["windSource"];
   tideResidualFt?: number | null;
+  daylight?: DaylightByDate;
 }) {
+  const daylight = context.daylight;
   const candidates = marine.time.map((time, index) => ({ time, index }))
-    .filter(({ time, index }) => time.startsWith(date) && Number(time.slice(11, 13)) >= 5 && Number(time.slice(11, 13)) <= 19
+    .filter(({ time, index }) => time.startsWith(date) && isDaylightHour(daylight, time)
       && waveAt(profile, marine, index, context.mop) != null)
     .map(({ index }) => index);
   if (!candidates.length) return null;
@@ -1057,7 +1103,7 @@ async function buildPayload() {
   const [regionalForecastResult, laJollaTideResult, sanDiegoTideResult, buoyResult, cdipResult, spectrumResult, windObservationResult, nwsWindResult, mopResults, laJollaResidualResult, sanDiegoResidualResult] = await Promise.all([
     fetchZones().then((value) => ({ ok: true as const, value })).catch((error) => {
       console.error(`[conditions] Open-Meteo batch unavailable: ${error instanceof Error ? error.message : "unknown error"}`);
-      return { ok: false as const, value: { zones: new Map<Zone, ZoneForecast>(), spotWinds: new Map<string, HourlyData>() } satisfies ForecastBundle };
+      return { ok: false as const, value: { zones: new Map<Zone, ZoneForecast>(), spotWinds: new Map<string, HourlyData>(), daylight: new Map() } satisfies ForecastBundle };
     }),
     fetchTides("9410230").then((feed) => ({ ok: feed.complete, value: feed.predictions })).catch(() => ({ ok: false, value: [] as TidePrediction[] })),
     fetchTides("9410170").then((feed) => ({ ok: feed.complete, value: feed.predictions })).catch(() => ({ ok: false, value: [] as TidePrediction[] })),
@@ -1095,6 +1141,7 @@ async function buildPayload() {
   const laJollaTides = applyTideResidual(laJollaTideResult.value, laJollaResidualResult.value);
   const sanDiegoTides = applyTideResidual(sanDiegoTideResult.value, sanDiegoResidualResult.value);
 
+  const daylight = regionalForecastResult.value.daylight;
   const mopBySpot = new Map<string, HourlyData>();
   mopResults.forEach((result, index) => {
     if (result.status === "fulfilled") mopBySpot.set(profiles[index].name, result.value);
@@ -1169,7 +1216,7 @@ async function buildPayload() {
     const tide = closestTide(tides, data.marine.time[index]);
     const face = spotHeight(profile, wave);
     const score = scoreConditions(profile, wave.period, windSpeed, windDirection, tide.value, face.faceFeet);
-    const window = bestWindow(profile, data.marine, data.weather, tides, index, mop);
+    const window = bestWindow(profile, data.marine, data.weather, tides, index, mop, daylight);
     const waterC = observation?.item.waterC ?? buoyResult.value?.waterC ?? null;
     const waterF = waterC != null ? Math.round(waterC * 9 / 5 + 32) : null;
     const windObservationApplied = Boolean(windObservationResult.value && data.windLive && profile.zone === "Central"
@@ -1215,7 +1262,7 @@ async function buildPayload() {
       raw: rawForecastRecord(profile, wave, data.marine.time[index], windSpeed, windDirection, tide.value,
         data.weather.wind_gusts_10m?.[index] ?? null,
         (profile.zone === "South Bay" ? sanDiegoResidualResult.value : laJollaResidualResult.value)?.feet ?? null),
-      hourly: buildSpotHourly(profile, data.marine, data.weather, tides, index, mop),
+      hourly: buildSpotHourly(profile, data.marine, data.weather, tides, index, mop, daylight),
     }];
   });
 
@@ -1227,7 +1274,7 @@ async function buildPayload() {
     const data = dataForProfile(lead);
     if (!data) return [];
     const tides = zone === "South Bay" ? sanDiegoTides : laJollaTides;
-    return [[zone, buildZoneSeries(zone, data.marine, data.weather, tides, mopBySpot.get(lead.name), lead)]];
+    return [[zone, buildZoneSeries(zone, data.marine, data.weather, tides, mopBySpot.get(lead.name), lead, daylight)]];
   }));
 
   const firstLiveZone = zones.find((zone) => zoneData.has(zone));
@@ -1253,6 +1300,7 @@ async function buildPayload() {
       regionalLive: data.regionalLive,
       windSource: data.windSource,
       tideResidualFt: (profile.zone === "South Bay" ? sanDiegoResidualResult.value : laJollaResidualResult.value)?.feet ?? null,
+      daylight,
     });
     return forecast ? [forecast] : [];
   })]));
@@ -1303,6 +1351,13 @@ async function buildPayload() {
       checkedAt: generatedAt,
       dataTimestamp: laJollaResidualResult.value?.observedKey ?? sanDiegoResidualResult.value?.observedKey,
     },
+    daylight: {
+      ok: daylight.size > 0,
+      detail: daylight.size > 0
+        ? `Surfable hours follow sunrise and sunset for each day; today ${daylightFor(daylight, localNowKey().slice(0, 10)).sunrise.slice(11)} to ${daylightFor(daylight, localNowKey().slice(0, 10)).sunset.slice(11)}`
+        : "Sunrise times unavailable; assuming 5am to 7pm, which includes darkness in winter",
+      checkedAt: generatedAt,
+    },
     tides: { ok: laJollaTideResult.ok && sanDiegoTideResult.ok, detail: `${Number(laJollaTideResult.ok) + Number(sanDiegoTideResult.ok)}/2 stations have complete five-day coverage; unbracketed hours are unavailable`, checkedAt: generatedAt, validThrough: tideValidThrough },
     buoy: { ok: buoyResult.ok, detail: buoyResult.ok ? "NDBC 46225 fallback observation live" : "CDIP observations are primary", checkedAt: generatedAt, dataTimestamp: buoyResult.value?.observedAt },
   };
@@ -1316,6 +1371,7 @@ async function buildPayload() {
     conditions,
     dailyConditions,
     zones: series,
+    daylight: [...daylight.entries()].map(([date, window]) => ({ date, sunrise: window.sunrise, sunset: window.sunset })),
     liveZones: [...zoneData.keys()],
     providers,
     sources: [

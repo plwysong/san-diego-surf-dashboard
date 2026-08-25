@@ -62,6 +62,12 @@ const providerInfo = {
     href: "https://tidesandcurrents.noaa.gov/waterlevels.html?id=9410230",
     link: "La Jolla water levels",
   },
+  daylight: {
+    name: "Daylight Window",
+    role: "Surfable hours are bounded by actual sunrise and sunset for each day rather than a fixed range, so a best window is never recommended after dark. In San Diego the usable window varies by more than three hours between summer and winter.",
+    href: "https://open-meteo.com/en/docs",
+    link: "Open-Meteo daily variables",
+  },
   tides: {
     name: "NOAA CO-OPS",
     role: "Hourly tide predictions from La Jolla and San Diego, validated across all five displayed days and interpolated only between nearby source hours.",
