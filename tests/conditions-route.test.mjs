@@ -976,3 +976,34 @@ test("surfable hours follow sunrise and sunset instead of a fixed window", async
     globalThis.fetch = originalFetch;
   }
 });
+
+test("every provider request identifies the application", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const healthy = tideScenarioFetch();
+    const seen = new Map();
+    globalThis.fetch = async (input, init) => {
+      const host = new URL(String(input)).hostname;
+      const agent = init?.headers?.["User-Agent"] ?? init?.headers?.get?.("User-Agent") ?? null;
+      seen.set(host, agent);
+      // api.weather.gov answers 403 without one, so a missing header is a real outage.
+      if (host === "api.weather.gov" && !agent) return new Response("Forbidden", { status: 403 });
+      return healthy(input, init);
+    };
+
+    const route = await import(`../app/api/conditions/route.ts?user-agent=${Date.now()}`);
+    const payload = await (await route.GET()).json();
+
+    const missing = [...seen].filter(([, agent]) => !agent).map(([host]) => host);
+    assert.deepEqual(missing, [], `every provider request must carry a User-Agent; missing on ${missing.join(", ")}`);
+    for (const [host, agent] of seen) {
+      assert.match(agent, /SanDiegoSurfDashboard/, `${host} received an unidentifying User-Agent: ${agent}`);
+    }
+
+    // The NWS fallback is the thing that breaks without it, so prove it works.
+    assert.ok(seen.has("api.weather.gov"), "the NWS fallback should have been attempted");
+    assert.equal(payload.conditions.length, 17);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

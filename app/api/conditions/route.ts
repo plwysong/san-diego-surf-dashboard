@@ -21,7 +21,7 @@ import {
   type WaveEstimate,
   type Zone,
 } from "../../../lib/forecast/model.ts";
-import { fetchJson, fetchText, inRange, isFresh, parseCsvRows, settledMapWithConcurrency } from "../../../lib/forecast/providers.ts";
+import { fetchJson, fetchText, inRange, isFresh, parseCsvRows, providerRequestInit, settledMapWithConcurrency } from "../../../lib/forecast/providers.ts";
 
 type ForecastMode = "live" | "partial" | "unavailable";
 type ForecastResponse = {
@@ -945,7 +945,7 @@ function applyTideResidual(predictions: TidePrediction[], residual: TideResidual
 }
 
 async function fetchBuoy() {
-  const response = await fetch("https://www.ndbc.noaa.gov/data/realtime2/46225.txt", { signal: AbortSignal.timeout(10_000) });
+  const response = await fetch("https://www.ndbc.noaa.gov/data/realtime2/46225.txt", providerRequestInit(10_000));
   if (!response.ok) throw new Error(`NDBC returned ${response.status}`);
   const text = await response.text();
   const row = text.split("\n").find((line) => line.trim() && !line.startsWith("#"));
