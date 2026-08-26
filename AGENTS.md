@@ -6,6 +6,8 @@ Maintain an accurate, resilient, and honest San Diego surf forecast. Never prese
 
 ## Before changing code
 
+- Read `docs/project-state.md` first. It says where the project stands, what is deliberately
+  unfinished, and which decisions were made on evidence and should not be undone casually.
 - Read `README.md` and inspect the relevant provider, forecast, UI, and test files.
 - Preserve `.openai/hosting.json`, the existing package manager, lockfile, runtime bindings, and Sites compatibility unless the task explicitly changes hosting.
 - Treat the public data-sources page as part of the forecast product. Update it whenever providers, fallbacks, caching, confidence, or forecast semantics change.
@@ -29,6 +31,28 @@ Maintain an accurate, resilient, and honest San Diego surf forecast. Never prese
   on the breaking-face translation. They are never ground truth and are never scored as such,
   but do not read the rule above as a ban on comparison. It has been misread that way before.
 - See `docs/forecast-verification.md` before changing anything about verification.
+
+## Deploying
+
+- Deployment is not possible from this repository. The site runs on ChatGPT Sites; `vinext deploy`
+  targets Cloudflare Workers, a different platform, and wrangler is not authenticated. The owner
+  deploys by asking ChatGPT to deploy the repo. Do not attempt it, and do not deploy to a
+  temporary preview account to work around it.
+- `main` is routinely ahead of production. Check before assuming a fix is live.
+- The first request after a deploy must report `cache.state: "origin"`. The cache key carries a
+  build id so every deploy invalidates its predecessor; a cache hit means the deploy did not take.
+
+## Things that pass locally and fail in production
+
+Every production bug found so far had this shape. Local Node is more permissive than a Worker.
+
+- Outbound requests must send a `User-Agent`. `api.weather.gov` returns 403 without one, Node
+  supplies a default and Workers do not, and this silently disabled the NWS wind fallback in
+  production while every test passed.
+- Open-Meteo's free tier rate-limits by IP and Cloudflare's egress is shared, so 429s occur that
+  have nothing to do with this app's request volume. Fallbacks must actually work.
+- If a test depends on the time of day, run it under a shifted clock across the day. One did, and
+  it blocked a deploy.
 
 ## Validation
 

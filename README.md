@@ -41,6 +41,7 @@ The build helpers prefer GNU `timeout` and fall back to `gtimeout` or an unbound
 - `lib/forecast/dates.ts` — San Diego-local date boundaries for current and future forecast views
 - `db/` — durable forecast-cache schema and access
 - `tests/` — provider-failure and forecast-engine regression tests
+- `docs/project-state.md` — **start here when picking the project up**: current state, open work, and decisions already made
 - `docs/forecast-verification.md` — what can be verified, measured skill, and evaluation rules
 - `docs/data-source-options.md` — free and paid data sources that could improve the forecast model
 - `scripts/verify-forecast-skill.mjs` — scores archived forecasts against CDIP truth (`npm run verify:skill`)
