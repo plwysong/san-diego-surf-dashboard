@@ -936,8 +936,13 @@ test("surfable hours follow sunrise and sunset instead of a fixed window", async
     return (await route.GET()).json();
   };
 
-  const hoursOf = (payload, name) => {
-    const spot = payload.conditions.find((item) => item.name === name);
+  // A future day uses the whole daylight window. The current-hours chart takes
+  // the next seven daylight hours from now, so mid-morning both windows return
+  // the same seven hours and neither boundary is exercised. That made an earlier
+  // version of this test pass in the afternoon and fail between 07:00 and 11:00.
+  const futureDayHours = (payload, name) => {
+    const dates = Object.keys(payload.dailyConditions).sort();
+    const spot = payload.dailyConditions[dates.at(-1)].find((item) => item.name === name);
     return spot.hourly.map((point) => {
       const [, value, meridiem] = point.time.match(/^(\d+)\s*(AM|PM)$/);
       const hour = Number(value) % 12;
@@ -948,7 +953,7 @@ test("surfable hours follow sunrise and sunset instead of a fixed window", async
   try {
     // A short winter day: sunrise 07:46, sunset 17:45.
     const winter = await run(daily("07:46", "17:45"), "winter");
-    const winterHours = hoursOf(winter, "Blacks");
+    const winterHours = futureDayHours(winter, "Blacks");
     assert.ok(winterHours.length > 0, "a winter day must still produce hours");
     assert.ok(Math.min(...winterHours) >= 7, `no hour before sunrise, got ${Math.min(...winterHours)}`);
     assert.ok(Math.max(...winterHours) <= 17, `no hour after sunset, got ${Math.max(...winterHours)}`);
@@ -960,13 +965,13 @@ test("surfable hours follow sunrise and sunset instead of a fixed window", async
     const assumed = await run(null, "assumed");
     assert.equal(assumed.providers.daylight.ok, false);
     assert.match(assumed.providers.daylight.detail, /assuming 5am to 7pm/);
-    const assumedHours = hoursOf(assumed, "Blacks");
+    const assumedHours = futureDayHours(assumed, "Blacks");
     assert.ok(Math.min(...assumedHours) >= 5 && Math.max(...assumedHours) <= 19);
 
-    // The winter window must be strictly tighter than the assumed one.
-    assert.ok(Math.min(...winterHours) > Math.min(...assumedHours)
-      || Math.max(...winterHours) < Math.max(...assumedHours),
-      "real daylight must narrow the window relative to the fixed assumption");
+    // Real daylight starts later than the assumption. True on every clock hour,
+    // because a future day is not truncated by the current time.
+    assert.ok(Math.min(...winterHours) > Math.min(...assumedHours),
+      `real daylight must start later than the fixed assumption: winter ${Math.min(...winterHours)} vs assumed ${Math.min(...assumedHours)}`);
   } finally {
     globalThis.fetch = originalFetch;
   }
