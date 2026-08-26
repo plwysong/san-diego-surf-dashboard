@@ -43,7 +43,14 @@ export default defineConfig(async () => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
+  // Changes every build, so a deployed payload never outlives the code that
+  // produced it. A cache key alone is not enough: it only gets bumped when the
+  // payload shape changes, and a deploy that alters behaviour without altering
+  // shape would otherwise serve pre-deploy data for a full fresh-TTL.
+  const buildId = `${Date.now().toString(36)}`;
+
   return {
+    define: { __FORECAST_BUILD_ID__: JSON.stringify(buildId) },
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local"],

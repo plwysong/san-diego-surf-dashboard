@@ -9,7 +9,19 @@ type ForecastPayload = Record<string, unknown> & { mode: "live" | "partial" | "u
 // deploy by up to FRESH_TTL_MS, so without a bump the new UI reads old fields:
 // after the surf-height band change that meant serving the previous headline
 // under the new label, which looks exactly like the change having failed.
-const CACHE_KEY = "san-diego-conditions-v12";
+declare const __FORECAST_BUILD_ID__: string | undefined;
+
+/**
+ * Scoped to the build that produced it.
+ *
+ * The version suffix is bumped by hand when the payload shape changes. That is
+ * not sufficient on its own: a deploy that changes behaviour without changing
+ * shape leaves the previous payload valid, so the old data keeps being served
+ * for up to FRESH_TTL_MS and the deploy looks like it silently failed. The
+ * build id makes every deploy invalidate its predecessor automatically.
+ */
+const BUILD_ID = typeof __FORECAST_BUILD_ID__ === "string" ? __FORECAST_BUILD_ID__ : "dev";
+const CACHE_KEY = `san-diego-conditions-v12-${BUILD_ID}`;
 const FRESH_TTL_MS = 60 * 60 * 1000;
 const STALE_TTL_MS = 36 * 60 * 60 * 1000;
 const REFRESH_LEASE_MS = 45 * 1000;
@@ -40,6 +52,12 @@ async function initializeCache(db: D1DatabaseLike) {
     last_error TEXT
   )`).run();
   await db.prepare("INSERT OR IGNORE INTO forecast_cache (cache_key) VALUES (?)").bind(CACHE_KEY).run();
+  // Each deploy takes a new key, so its predecessor's row can never be read
+  // again. Drop the ones already past their stale window rather than letting a
+  // row accumulate per release. Waiting for staleness avoids deleting a row a
+  // previous worker is still serving during a rollout.
+  await db.prepare("DELETE FROM forecast_cache WHERE cache_key != ? AND stale_until < ?")
+    .bind(CACHE_KEY, Date.now()).run();
   await db.prepare(`CREATE TABLE IF NOT EXISTS forecast_history (
     issued_at INTEGER PRIMARY KEY,
     mode TEXT NOT NULL,
